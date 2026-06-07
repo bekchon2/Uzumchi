@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: uzum-seller-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python run.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DB_PATH
+        value: /data/uzum_bot.db
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: PORT
+        value: "8080"
+    disk:
+      name: bot-db
+      mountPath: /data
+      sizeGB: 1

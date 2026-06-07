@@ -1,0 +1,128 @@
+"""
+Telegram tugmalar (ReplyKeyboard va InlineKeyboard).
+"""
+from aiogram.types import (
+    ReplyKeyboardMarkup, KeyboardButton,
+    InlineKeyboardMarkup, InlineKeyboardButton,
+)
+from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
+from locales.i18n import t
+
+
+def lang_keyboard() -> InlineKeyboardMarkup:
+    """Til tanlash tugmalari."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text="🇷🇺 Русский", callback_data="lang_ru")
+    builder.button(text="🇺🇿 O'zbek", callback_data="lang_uz")
+    builder.adjust(2)
+    return builder.as_markup()
+
+
+def main_menu_keyboard(lang: str = "ru") -> ReplyKeyboardMarkup:
+    """Asosiy menyu tugmalari."""
+    builder = ReplyKeyboardBuilder()
+    builder.button(text=t("btn_products", lang))
+    builder.button(text=t("btn_orders", lang))
+    builder.button(text=t("btn_storage", lang))
+    builder.button(text=t("btn_report", lang))
+    builder.button(text=t("btn_weekly", lang))
+    builder.button(text=t("btn_monthly", lang))
+    builder.button(text=t("btn_returns", lang))
+    builder.button(text=t("btn_competitor", lang))
+    builder.button(text=t("btn_ai", lang))
+    builder.button(text=t("btn_settings", lang))
+    builder.adjust(2, 2, 2, 2, 1, 1)
+    return builder.as_markup(resize_keyboard=True)
+
+
+def back_keyboard(lang: str = "ru") -> ReplyKeyboardMarkup:
+    """Faqat 'Orqaga' tugmasi."""
+    builder = ReplyKeyboardBuilder()
+    builder.button(text=t("btn_back", lang))
+    return builder.as_markup(resize_keyboard=True)
+
+
+def back_refresh_keyboard(lang: str = "ru") -> ReplyKeyboardMarkup:
+    """Orqaga + Yangilash tugmalari."""
+    builder = ReplyKeyboardBuilder()
+    builder.button(text=t("btn_refresh", lang))
+    builder.button(text=t("btn_back", lang))
+    builder.adjust(2)
+    return builder.as_markup(resize_keyboard=True)
+
+
+def settings_keyboard(lang: str = "ru") -> InlineKeyboardMarkup:
+    """Sozlamalar inline tugmalari."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text=t("btn_change_key", lang), callback_data="settings_change_key")
+    builder.button(text=t("btn_change_lang", lang), callback_data="settings_change_lang")
+    builder.button(text=t("btn_switch_shop", lang), callback_data="settings_switch_shop")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def shops_keyboard(shops: list[dict], lang: str = "ru") -> InlineKeyboardMarkup:
+    """Multi-shop: do'konlar ro'yxati."""
+    builder = InlineKeyboardBuilder()
+    for shop in shops:
+        shop_id = shop.get("id", 0)
+        shop_name = shop.get("name", f"Do'kon {shop_id}")
+        builder.button(
+            text=f"🏪 {shop_name}",
+            callback_data=f"shop_{shop_id}_{shop_name[:20]}"
+        )
+    builder.button(text=t("btn_back", lang), callback_data="shop_back")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def competitor_keyboard(lang: str = "ru") -> InlineKeyboardMarkup:
+    """Raqib narx monitoring tugmalari."""
+    builder = InlineKeyboardBuilder()
+    builder.button(
+        text="🔍 " + ("Narx qidirish" if lang == "uz" else "Поиск цен"),
+        callback_data="competitor_search"
+    )
+    builder.button(
+        text="📋 " + ("Kuzatilayotganlar" if lang == "uz" else "Отслеживаемые"),
+        callback_data="competitor_list"
+    )
+    builder.button(text=t("btn_back", lang), callback_data="competitor_back")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def ai_keyboard(lang: str = "ru") -> InlineKeyboardMarkup:
+    """AI maslahatchi tugmalari."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text=t("btn_ai_sales", lang), callback_data="ai_sales")
+    builder.button(text=t("btn_ai_storage", lang), callback_data="ai_storage")
+    builder.button(text=t("btn_ai_question", lang), callback_data="ai_question")
+    builder.button(text=t("btn_back", lang), callback_data="ai_back")
+    builder.adjust(1)
+    return builder.as_markup()
+
+
+def cancel_keyboard(lang: str = "ru") -> ReplyKeyboardMarkup:
+    """Bekor qilish tugmasi (FSM uchun)."""
+    builder = ReplyKeyboardBuilder()
+    cancel_text = "❌ Bekor qilish" if lang == "uz" else "❌ Отмена"
+    builder.button(text=cancel_text)
+    return builder.as_markup(resize_keyboard=True)
+
+
+def products_nav_keyboard(page: int, total_pages: int, lang: str = "ru") -> InlineKeyboardMarkup:
+    """Mahsulotlar paginatsiyasi."""
+    builder = InlineKeyboardBuilder()
+    if page > 1:
+        builder.button(text="⬅️", callback_data=f"products_page_{page - 1}")
+    builder.button(text=f"{page}/{total_pages}", callback_data="products_noop")
+    if page < total_pages:
+        builder.button(text="➡️", callback_data=f"products_page_{page + 1}")
+    builder.button(
+        text="🔍 " + ("Raqib narxlar" if lang == "uz" else "Цены конкурентов"),
+        callback_data="products_competitor"
+    )
+    builder.button(text=t("btn_back", lang), callback_data="products_back")
+    builder.adjust(3, 1, 1)
+    return builder.as_markup()

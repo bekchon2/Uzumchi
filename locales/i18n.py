@@ -1,0 +1,276 @@
+"""
+Ikki tilli tarjima moduli: O'zbek (uz) va Rus (ru).
+"""
+
+TEXTS = {
+    # ── Onboarding ──────────────────────────────────────────────────────────
+    "welcome": {
+        "uz": (
+            "👋 <b>Assalomu alaykum!</b>\n\n"
+            "Bu bot Uzum Seller sotuvchi paneli uchun.\n"
+            "Tilni tanlang:"
+        ),
+        "ru": (
+            "👋 <b>Добро пожаловать!</b>\n\n"
+            "Этот бот для продавцов Uzum Seller.\n"
+            "Выберите язык:"
+        ),
+    },
+    "lang_selected": {
+        "uz": "✅ Til: O'zbek tili tanlandi.",
+        "ru": "✅ Язык: Русский выбран.",
+    },
+    "ask_api_key": {
+        "uz": (
+            "🔑 <b>Uzum Seller API kalitingizni kiriting:</b>\n\n"
+            "📌 API kalitni qayerdan olish:\n"
+            "1. seller.uzum.uz ga kiring\n"
+            "2. Sozlamalar → API kalitlar\n"
+            "3. Yangi kalit yarating\n\n"
+            "⚠️ Xabaringiz kiritilgandan keyin o'chirilib, xavfsizlik ta'minlanadi."
+        ),
+        "ru": (
+            "🔑 <b>Введите ваш API ключ Uzum Seller:</b>\n\n"
+            "📌 Где взять API ключ:\n"
+            "1. Зайдите на seller.uzum.uz\n"
+            "2. Настройки → API ключи\n"
+            "3. Создайте новый ключ\n\n"
+            "⚠️ Ваше сообщение будет удалено для безопасности."
+        ),
+    },
+    "api_checking": {
+        "uz": "⏳ Kalit tekshirilmoqda...",
+        "ru": "⏳ Проверяю ключ...",
+    },
+    "api_invalid": {
+        "uz": "❌ <b>API kalit noto'g'ri!</b>\nQaytadan kiriting:",
+        "ru": "❌ <b>Неверный API ключ!</b>\nВведите снова:",
+    },
+    "api_success": {
+        "uz": "✅ <b>API kalit tasdiqlandi!</b>\nDo'kon: <b>{shop_name}</b>",
+        "ru": "✅ <b>API ключ подтверждён!</b>\nМагазин: <b>{shop_name}</b>",
+    },
+    "setup_complete": {
+        "uz": "🎉 <b>Sozlash tugadi!</b> Asosiy menyuga xush kelibsiz.",
+        "ru": "🎉 <b>Настройка завершена!</b> Добро пожаловать в главное меню.",
+    },
+
+    # ── Main menu ────────────────────────────────────────────────────────────
+    "main_menu": {
+        "uz": "🏠 <b>Asosiy menyu</b>\nDo'kon: <b>{shop_name}</b>",
+        "ru": "🏠 <b>Главное меню</b>\nМагазин: <b>{shop_name}</b>",
+    },
+    "loading": {
+        "uz": "⏳ Ma'lumotlar yuklanmoqda...",
+        "ru": "⏳ Загружаю данные...",
+    },
+    "error_api": {
+        "uz": "❌ <b>API xatosi:</b> {error}\n\nAPI kalitingizni tekshiring.",
+        "ru": "❌ <b>Ошибка API:</b> {error}\n\nПроверьте ваш API ключ.",
+    },
+    "no_data": {
+        "uz": "📭 Ma'lumot topilmadi.",
+        "ru": "📭 Данные не найдены.",
+    },
+
+    # ── Products ─────────────────────────────────────────────────────────────
+    "products_title": {
+        "uz": "📦 <b>Mahsulotlarim</b> ({count} ta):",
+        "ru": "📦 <b>Мои товары</b> ({count} шт.):",
+    },
+    "product_item": {
+        "uz": (
+            "{icon} <b>{name}</b>\n"
+            "   📊 Qoldiq: <b>{qty}</b> dona\n"
+            "   💰 Narx: {price:,.0f} so'm\n"
+            "   📈 Kunlik: {avg:.1f} ta | ⏳ {days} kun"
+        ),
+        "ru": (
+            "{icon} <b>{name}</b>\n"
+            "   📊 Остаток: <b>{qty}</b> шт.\n"
+            "   💰 Цена: {price:,.0f} сум\n"
+            "   📈 В день: {avg:.1f} шт. | ⏳ {days} дн."
+        ),
+    },
+
+    # ── Orders ───────────────────────────────────────────────────────────────
+    "orders_title": {
+        "uz": "🛒 <b>Buyurtmalar</b> (so'nggi 24 soat):",
+        "ru": "🛒 <b>Заказы</b> (за последние 24 часа):",
+    },
+    "orders_summary": {
+        "uz": (
+            "📊 Jami: <b>{total}</b>\n"
+            "✅ Yetkazildi: <b>{delivered}</b>\n"
+            "🔄 Jarayonda: <b>{processing}</b>\n"
+            "🚚 Yo'lda: <b>{shipped}</b>\n"
+            "❌ Bekor qilindi: <b>{cancelled}</b>\n"
+            "💰 Tushum: <b>{revenue:,.0f} so'm</b>"
+        ),
+        "ru": (
+            "📊 Всего: <b>{total}</b>\n"
+            "✅ Доставлено: <b>{delivered}</b>\n"
+            "🔄 В обработке: <b>{processing}</b>\n"
+            "🚚 В пути: <b>{shipped}</b>\n"
+            "❌ Отменено: <b>{cancelled}</b>\n"
+            "💰 Выручка: <b>{revenue:,.0f} сум</b>"
+        ),
+    },
+
+    # ── Storage ──────────────────────────────────────────────────────────────
+    "storage_title": {
+        "uz": "🏭 <b>Omborxona holati</b>",
+        "ru": "🏭 <b>Состояние склада</b>",
+    },
+    "storage_free_limit": {
+        "uz": "ℹ️ Uzum 60 kun bepul saqlaydi.",
+        "ru": "ℹ️ Uzum хранит бесплатно 60 дней.",
+    },
+
+    # ── Reports ──────────────────────────────────────────────────────────────
+    "report_today": {
+        "uz": "📊 <b>Bugungi hisobot</b>",
+        "ru": "📊 <b>Отчёт за сегодня</b>",
+    },
+    "report_weekly": {
+        "uz": "📈 <b>Haftalik hisobot</b> (so'nggi 7 kun)",
+        "ru": "📈 <b>Недельный отчёт</b> (последние 7 дней)",
+    },
+    "report_monthly": {
+        "uz": "📅 <b>Oylik hisobot</b> (so'nggi 30 kun)",
+        "ru": "📅 <b>Месячный отчёт</b> (последние 30 дней)",
+    },
+    "low_stock_header": {
+        "uz": "⚠️ <b>Kam qolgan tovarlar:</b>",
+        "ru": "⚠️ <b>Товары с низким остатком:</b>",
+    },
+    "out_of_stock_header": {
+        "uz": "🚫 <b>Tugagan tovarlar:</b>",
+        "ru": "🚫 <b>Закончившиеся товары:</b>",
+    },
+
+    # ── Returns ──────────────────────────────────────────────────────────────
+    "returns_title": {
+        "uz": "↩️ <b>Qaytarmalar</b> (so'nggi 30 kun):",
+        "ru": "↩️ <b>Возвраты</b> (за 30 дней):",
+    },
+    "returns_today_new": {
+        "uz": "🆕 Bugungi yangi qaytarmalar: <b>{count}</b>",
+        "ru": "🆕 Новых возвратов сегодня: <b>{count}</b>",
+    },
+
+    # ── Settings ─────────────────────────────────────────────────────────────
+    "settings_title": {
+        "uz": "⚙️ <b>Sozlamalar</b>",
+        "ru": "⚙️ <b>Настройки</b>",
+    },
+    "settings_info": {
+        "uz": (
+            "👤 Foydalanuvchi: @{username}\n"
+            "🏪 Faol do'kon: <b>{shop_name}</b> (ID: {shop_id})\n"
+            "🌐 Til: O'zbek 🇺🇿\n"
+            "🔑 API kalit: {key_status}"
+        ),
+        "ru": (
+            "👤 Пользователь: @{username}\n"
+            "🏪 Активный магазин: <b>{shop_name}</b> (ID: {shop_id})\n"
+            "🌐 Язык: Русский 🇷🇺\n"
+            "🔑 API ключ: {key_status}"
+        ),
+    },
+    "key_set": {
+        "uz": "✅ O'rnatilgan",
+        "ru": "✅ Установлен",
+    },
+    "key_not_set": {
+        "uz": "❌ O'rnatilmagan",
+        "ru": "❌ Не установлен",
+    },
+
+    # ── Multi-shop ────────────────────────────────────────────────────────────
+    "shop_select_title": {
+        "uz": "🏪 <b>Do'koningizni tanlang:</b>",
+        "ru": "🏪 <b>Выберите ваш магазин:</b>",
+    },
+    "shop_switched": {
+        "uz": "✅ Do'kon o'zgartirildi: <b>{shop_name}</b>",
+        "ru": "✅ Магазин переключён: <b>{shop_name}</b>",
+    },
+    "shop_single": {
+        "uz": "ℹ️ Sizda faqat bitta do'kon mavjud.",
+        "ru": "ℹ️ У вас только один магазин.",
+    },
+
+    # ── Competitor ────────────────────────────────────────────────────────────
+    "competitor_title": {
+        "uz": "🔍 <b>Raqib narx monitoring</b>",
+        "ru": "🔍 <b>Мониторинг цен конкурентов</b>",
+    },
+    "competitor_ask_name": {
+        "uz": "🔍 Mahsulot nomini kiriting (qidirish uchun):",
+        "ru": "🔍 Введите название товара для поиска:",
+    },
+    "competitor_searching": {
+        "uz": "🔍 Raqiblar narxi tekshirilmoqda...",
+        "ru": "🔍 Ищу цены конкурентов...",
+    },
+    "competitor_not_found": {
+        "uz": "❌ Raqiblar topilmadi.",
+        "ru": "❌ Конкуренты не найдены.",
+    },
+
+    # ── AI ────────────────────────────────────────────────────────────────────
+    "ai_title": {
+        "uz": "🤖 <b>AI Maslahatchi (Gemini)</b>",
+        "ru": "🤖 <b>AI Советник (Gemini)</b>",
+    },
+    "ai_thinking": {
+        "uz": "🤖 Gemini tahlil qilmoqda...",
+        "ru": "🤖 Gemini анализирует...",
+    },
+    "ai_ask_question": {
+        "uz": "💬 Savolingizni yozing (savdo, narx, strategiya haqida):",
+        "ru": "💬 Введите ваш вопрос (о продажах, ценах, стратегии):",
+    },
+    "ai_no_key": {
+        "uz": "⚠️ Gemini AI ulangan emas. GEMINI_API_KEY sozlamalarini tekshiring.",
+        "ru": "⚠️ Gemini AI не подключён. Проверьте настройку GEMINI_API_KEY.",
+    },
+
+    # ── Buttons ───────────────────────────────────────────────────────────────
+    "btn_products": {"uz": "📦 Mahsulotlarim", "ru": "📦 Мои товары"},
+    "btn_orders": {"uz": "🛒 Buyurtmalar", "ru": "🛒 Заказы"},
+    "btn_storage": {"uz": "🏭 Ombor", "ru": "🏭 Склад"},
+    "btn_report": {"uz": "📊 Hisobot", "ru": "📊 Отчёт"},
+    "btn_weekly": {"uz": "📈 Haftalik", "ru": "📈 Недельный"},
+    "btn_monthly": {"uz": "📅 Oylik", "ru": "📅 Месячный"},
+    "btn_returns": {"uz": "↩️ Qaytarmalar", "ru": "↩️ Возвраты"},
+    "btn_settings": {"uz": "⚙️ Sozlamalar", "ru": "⚙️ Настройки"},
+    "btn_competitor": {"uz": "🔍 Raqib narxlar", "ru": "🔍 Цены конкурентов"},
+    "btn_ai": {"uz": "🤖 AI Maslahat", "ru": "🤖 AI Совет"},
+    "btn_switch_shop": {"uz": "🏪 Do'kon almashtirish", "ru": "🏪 Сменить магазин"},
+    "btn_change_key": {"uz": "🔑 API kalit o'zgartirish", "ru": "🔑 Изменить API ключ"},
+    "btn_change_lang": {"uz": "🌐 Tilni o'zgartirish", "ru": "🌐 Сменить язык"},
+    "btn_back": {"uz": "🔙 Orqaga", "ru": "🔙 Назад"},
+    "btn_refresh": {"uz": "🔄 Yangilash", "ru": "🔄 Обновить"},
+    "btn_ai_sales": {"uz": "📊 Savdo tahlili", "ru": "📊 Анализ продаж"},
+    "btn_ai_storage": {"uz": "🏭 Ombor tavsiyasi", "ru": "🏭 Совет по складу"},
+    "btn_ai_question": {"uz": "💬 Savol berish", "ru": "💬 Задать вопрос"},
+}
+
+
+def t(key: str, lang: str = "ru", **kwargs) -> str:
+    """
+    Tarjima olish.
+    :param key: TEXTS lug'atidagi kalit
+    :param lang: 'uz' yoki 'ru'
+    :param kwargs: format uchun parametrlar
+    """
+    entry = TEXTS.get(key, {})
+    text = entry.get(lang, entry.get("ru", f"[{key}]"))
+    if kwargs:
+        try:
+            text = text.format(**kwargs)
+        except (KeyError, ValueError):
+            pass
+    return text
