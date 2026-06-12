@@ -33,10 +33,12 @@ class UzumRateLimitError(UzumAPIError):
 
 async def _get(endpoint: str, api_key: str, params: dict = None, retry: int = 2):
     url = BASE_URL + endpoint
-    headers = {"Authorization": api_key, "Content-Type": "application/json"}
+    # Content-Type GET da kerak emas — ba'zi API larда muammo чиқаради
+    headers = {"Authorization": api_key}
     await asyncio.sleep(0.3)
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=SSL_CONTEXT)) as session:
         async with session.get(url, headers=headers, params=params) as resp:
+            logger.debug(f"GET {endpoint} → {resp.status}")
             if resp.status == 200:
                 return await resp.json()
             elif resp.status == 401 or resp.status == 403:
@@ -49,7 +51,7 @@ async def _get(endpoint: str, api_key: str, params: dict = None, retry: int = 2)
                 raise UzumRateLimitError("Rate limit exceeded")
             else:
                 text = await resp.text()
-                raise UzumAPIError(f"HTTP {resp.status}: {text[:200]}")
+                raise UzumAPIError(f"HTTP {resp.status}: {text[:300]}")
 
 
 async def _post(endpoint: str, api_key: str, payload: dict = None, retry: int = 2):
@@ -83,9 +85,37 @@ async def get_shops(api_key: str) -> list[dict]:
 # ─── Products ─────────────────────────────────────────────────────────────────
 
 async def get_products(api_key: str, shop_id: int) -> list[dict]:
-    """Mahsulotlar ro'yxati → productList"""
-    data = await _get(f"/v1/product/shop/{shop_id}", api_key)
-    return data.get("productList", [])
+    """
+    Mahsulotlar ro'yxati.
+    Swagger: GET /v1/product/shop/{shopId}
+    Parametrlar: size, page (ixtiyoriy)
+    """
+    params = {"size": 100, "page": 0}
+    try:
+        data = await _get(f"/v1/product/shop/{shop_id}", api_key, params)
+        if isinstance(data, list):
+            return data
+        # Turli response formatlarini qo'llab-quvvatlash
+        return (
+            data.get("productList")
+            or data.get("products")
+            or data.get("payload", {}).get("products", [])
+            or []
+        )
+    except UzumAPIError as e:
+        # Parametrsiz ham urinib ko'rish
+        logger.warning(f"get_products with params failed: {e}, retrying without params")
+        try:
+            data = await _get(f"/v1/product/shop/{shop_id}", api_key)
+            if isinstance(data, list):
+                return data
+            return (
+                data.get("productList")
+                or data.get("products")
+                or []
+            )
+        except Exception:
+            raise
 
 
 # ─── Orders ───────────────────────────────────────────────────────────────────
@@ -125,14 +155,39 @@ async def get_fbs_orders(
     date_from: int = None,
     date_to: int = None,
 ) -> list[dict]:
-    """FBS buyurtmalar → orders list"""
+    """
+    FBS buyurtmalar.
+    Swagger: GET /v2/fbs/orders
+    Parametrlar: dateFrom, dateTo, limit, offset
+    """
     if date_from is None:
         date_from = _days_ago_ms(1)
     if date_to is None:
         date_to = _now_ms()
-    params = {"dateFrom": date_from, "dateTo": date_to}
-    data = await _get("/v2/fbs/orders", api_key, params)
-    return data.get("payload", {}).get("orders", [])
+    params = {
+        "dateFrom": date_from,
+        "dateTo": date_to,
+        "limit": 100,
+        "offset": 0,
+    }
+    try:
+        data = await _get("/v2/fbs/orders", api_key, params)
+        # Turli response formatlarini qo'llab-quvvatlash
+        if isinstance(data, list):
+            return data
+        return (
+            data.get("payload", {}).get("orders", [])
+            or data.get("orders", [])
+            or []
+        )
+    except UzumAuthError:
+        # FBS endpoint ruxsat bermasligi mumkin — finance orders ga o'tish
+        logger.warning("FBS orders 401/403, trying finance orders")
+        try:
+            fin = await get_finance_orders(api_key, date_from, date_to)
+            return fin.get("orderItems", [])
+        except Exception:
+            return []
 
 
 async def get_fbs_orders_period(api_key: str, days: int = 7) -> list[dict]:
@@ -146,24 +201,48 @@ async def get_fbs_orders_period(api_key: str, days: int = 7) -> list[dict]:
 # ─── Invoices ─────────────────────────────────────────────────────────────────
 
 async def get_invoices(api_key: str, shop_id: int) -> list[dict]:
-    """Nakładnoylar → [{"id":..., "dateAccepted":..., "invoiceStatus":...}]"""
-    data = await _get(f"/v1/shop/{shop_id}/invoice", api_key)
-    if isinstance(data, list):
-        return data
-    return data.get("invoices", [])
+    """
+    Nakładnoylar.
+    Swagger: GET /v1/shop/{shopId}/invoice
+    """
+    try:
+        data = await _get(f"/v1/shop/{shop_id}/invoice", api_key)
+        if isinstance(data, list):
+            return data
+        return (
+            data.get("invoices")
+            or data.get("payload", [])
+            or []
+        )
+    except UzumAPIError as e:
+        logger.warning(f"get_invoices error: {e}")
+        return []
 
 
 # ─── Returns ──────────────────────────────────────────────────────────────────
 
 async def get_returns(api_key: str, date_from: int = None, date_to: int = None) -> list[dict]:
-    """Qaytarmalar → payload list"""
+    """
+    Qaytarmalar.
+    Swagger: GET /v1/return
+    """
     if date_from is None:
         date_from = _days_ago_ms(30)
     if date_to is None:
         date_to = _now_ms()
     params = {"dateFrom": date_from, "dateTo": date_to}
-    data = await _get("/v1/return", api_key, params)
-    return data.get("payload", [])
+    try:
+        data = await _get("/v1/return", api_key, params)
+        if isinstance(data, list):
+            return data
+        return (
+            data.get("payload", [])
+            or data.get("returns", [])
+            or []
+        )
+    except UzumAPIError as e:
+        logger.warning(f"get_returns error: {e}")
+        return []
 
 
 async def get_today_returns(api_key: str) -> list[dict]:
