@@ -6,11 +6,17 @@ Auth: Authorization: <api_key>  ← Bearer prefikssiz!
 import asyncio
 import logging
 import datetime
+import ssl
 import aiohttp
 
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api-seller.uzum.uz/api/seller-openapi"
+
+# Windows da SSL sertifikat muammosini hal qilish
+SSL_CONTEXT = ssl.create_default_context()
+SSL_CONTEXT.check_hostname = False
+SSL_CONTEXT.verify_mode = ssl.CERT_NONE
 
 
 class UzumAPIError(Exception):
@@ -29,7 +35,7 @@ async def _get(endpoint: str, api_key: str, params: dict = None, retry: int = 2)
     url = BASE_URL + endpoint
     headers = {"Authorization": api_key, "Content-Type": "application/json"}
     await asyncio.sleep(0.3)
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=SSL_CONTEXT)) as session:
         async with session.get(url, headers=headers, params=params) as resp:
             if resp.status == 200:
                 return await resp.json()
@@ -50,7 +56,7 @@ async def _post(endpoint: str, api_key: str, payload: dict = None, retry: int = 
     url = BASE_URL + endpoint
     headers = {"Authorization": api_key, "Content-Type": "application/json"}
     await asyncio.sleep(0.3)
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=SSL_CONTEXT)) as session:
         async with session.post(url, headers=headers, json=payload) as resp:
             if resp.status == 200:
                 return await resp.json()

@@ -4,12 +4,18 @@ Uzum ochiq katalog API orqali mahsulot narxlarini kuzatadi.
 """
 import asyncio
 import logging
+import ssl
 import aiohttp
 import datetime
 
 logger = logging.getLogger(__name__)
 
 CATALOG_BASE = "https://api.uzum.uz/api"
+
+# Windows SSL muammosini hal qilish
+SSL_CONTEXT = ssl.create_default_context()
+SSL_CONTEXT.check_hostname = False
+SSL_CONTEXT.verify_mode = ssl.CERT_NONE
 
 
 async def search_products_by_name(query: str, limit: int = 20) -> list[dict]:
@@ -29,7 +35,7 @@ async def search_products_by_name(query: str, limit: int = 20) -> list[dict]:
     }
     try:
         await asyncio.sleep(0.5)
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=SSL_CONTEXT)) as session:
             async with session.get(url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as resp:
                 if resp.status == 200:
                     data = await resp.json()

@@ -4,6 +4,7 @@ Google Gemini API orqali savdo tahlili va tavsiyalar beradi.
 """
 import asyncio
 import logging
+import ssl
 import aiohttp
 import os
 import json
@@ -12,6 +13,11 @@ logger = logging.getLogger(__name__)
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+
+# Windows SSL muammosini hal qilish
+SSL_CONTEXT = ssl.create_default_context()
+SSL_CONTEXT.check_hostname = False
+SSL_CONTEXT.verify_mode = ssl.CERT_NONE
 
 
 async def ask_gemini(prompt: str, lang: str = "ru") -> str:
@@ -37,7 +43,7 @@ async def ask_gemini(prompt: str, lang: str = "ru") -> str:
     }
 
     try:
-        async with aiohttp.ClientSession() as session:
+        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=SSL_CONTEXT)) as session:
             async with session.post(
                 GEMINI_URL,
                 params={"key": GEMINI_API_KEY},
