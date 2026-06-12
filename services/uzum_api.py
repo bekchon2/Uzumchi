@@ -172,7 +172,6 @@ async def get_fbs_orders(
     }
     try:
         data = await _get("/v2/fbs/orders", api_key, params)
-        # Turli response formatlarini qo'llab-quvvatlash
         if isinstance(data, list):
             return data
         return (
@@ -180,13 +179,16 @@ async def get_fbs_orders(
             or data.get("orders", [])
             or []
         )
-    except UzumAuthError:
-        # FBS endpoint ruxsat bermasligi mumkin — finance orders ga o'tish
-        logger.warning("FBS orders 401/403, trying finance orders")
+    except (UzumAuthError, UzumAPIError) as e:
+        # FBS endpoint ruxsat bermasligi yoki 400 — finance orders ga o'tish
+        logger.warning(f"FBS orders failed ({e}), trying finance orders")
         try:
             fin = await get_finance_orders(api_key, date_from, date_to)
-            return fin.get("orderItems", [])
-        except Exception:
+            items = fin.get("orderItems", [])
+            logger.info(f"Finance orders fallback: {len(items)} items")
+            return items
+        except Exception as e2:
+            logger.warning(f"Finance orders also failed: {e2}")
             return []
 
 

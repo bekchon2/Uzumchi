@@ -197,9 +197,13 @@ async def cmd_orders(message: Message):
 
         await msg.edit_text(text, reply_markup=back_refresh_keyboard(lang), parse_mode="HTML")
 
-    except (UzumAuthError, UzumAPIError) as e:
-        logger.error(f"Orders error: {e}")
-        await msg.edit_text(_api_error_text(lang), reply_markup=back_keyboard(lang), parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Orders error: {type(e).__name__}: {e}")
+        await msg.edit_text(
+            _api_error_text(lang, f"{type(e).__name__}: {str(e)[:60]}"),
+            reply_markup=back_keyboard(lang),
+            parse_mode="HTML"
+        )
 
 
 # ─── Omborxona ────────────────────────────────────────────────────────────────
@@ -218,9 +222,13 @@ async def cmd_storage(message: Message):
         report = format_storage_report(storage_items, lang)
         await msg.edit_text(report, reply_markup=back_refresh_keyboard(lang), parse_mode="HTML")
 
-    except (UzumAuthError, UzumAPIError) as e:
-        logger.error(f"Storage error: {e}")
-        await msg.edit_text(_api_error_text(lang), reply_markup=back_keyboard(lang), parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Storage error: {type(e).__name__}: {e}")
+        await msg.edit_text(
+            _api_error_text(lang, f"{type(e).__name__}: {str(e)[:60]}"),
+            reply_markup=back_keyboard(lang),
+            parse_mode="HTML"
+        )
 
 
 # ─── Bugungi hisobot ──────────────────────────────────────────────────────────
@@ -295,9 +303,13 @@ async def cmd_report_today(message: Message):
 
         await msg.edit_text(text, reply_markup=back_refresh_keyboard(lang), parse_mode="HTML")
 
-    except (UzumAuthError, UzumAPIError) as e:
-        logger.error(f"Report error: {e}")
-        await msg.edit_text(_api_error_text(lang), reply_markup=back_keyboard(lang), parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Report error: {type(e).__name__}: {e}")
+        await msg.edit_text(
+            _api_error_text(lang, f"{type(e).__name__}: {str(e)[:60]}"),
+            reply_markup=back_keyboard(lang),
+            parse_mode="HTML"
+        )
 
 
 # ─── Sozlamalar ───────────────────────────────────────────────────────────────

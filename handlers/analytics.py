@@ -12,14 +12,12 @@ from database import get_user
 from services.uzum_api import (
     get_fbs_orders_period, get_returns, get_expenses,
     get_products, get_invoices, summarize_orders,
-    UzumAuthError, UzumAPIError,
     _days_ago_ms, _now_ms
 )
 from services.storage_tracker import parse_invoices, get_storage_alerts
 from services.charts import weekly_sales_chart, monthly_sales_chart
 from services.gemini_ai import (
-    ask_gemini, build_sales_analysis_prompt,
-    build_competitor_advice_prompt, build_storage_advice_prompt
+    ask_gemini, build_sales_analysis_prompt, build_storage_advice_prompt
 )
 from locales.i18n import t
 from utils.keyboards import (
@@ -50,7 +48,6 @@ def _build_daily_data(orders: list[dict], days: int = 7) -> list[dict]:
     """Kunlik statistika shakllantirish."""
     from collections import defaultdict
     daily: dict[str, dict] = defaultdict(lambda: {"orders": 0, "revenue": 0.0})
-
     for o in orders:
         ts = o.get("createdAt") or o.get("orderDate") or 0
         if ts:
@@ -62,18 +59,24 @@ def _build_daily_data(orders: list[dict], days: int = 7) -> list[dict]:
                     daily[day_str]["revenue"] += safe_float(o.get("finalPrice") or o.get("price"))
             except Exception:
                 pass
-
-    # So'nggi N kun uchun to'ldirish
     result = []
     for i in range(days - 1, -1, -1):
         dt = datetime.datetime.now() - datetime.timedelta(days=i)
         day_str = dt.strftime("%d.%m")
-        result.append({
-            "date": day_str,
-            "orders": daily[day_str]["orders"],
-            "revenue": daily[day_str]["revenue"],
-        })
+        result.append({"date": day_str, "orders": daily[day_str]["orders"], "revenue": daily[day_str]["revenue"]})
     return result
+
+
+def _is_in_week(order: dict, week_num: int) -> bool:
+    ts = order.get("createdAt") or order.get("orderDate") or 0
+    if not ts:
+        return False
+    try:
+        dt = datetime.datetime.fromtimestamp(int(ts) / 1000)
+        days_ago = (datetime.datetime.now() - dt).days
+        return week_num * 7 <= days_ago < (week_num + 1) * 7
+    except Exception:
+        return False
 
 
 # ─── Haftalik hisobot ─────────────────────────────────────────────────────────
@@ -91,7 +94,6 @@ async def cmd_weekly(message: Message):
         stats = summarize_orders(orders)
         daily_data = _build_daily_data(orders, days=7)
 
-        # Matn hisobot
         if lang == "uz":
             text = (
                 f"📈 <b>Haftalik hisobot</b> (so'nggi 7 kun)\n\n"
@@ -119,7 +121,6 @@ async def cmd_weekly(message: Message):
 
         await msg.edit_text(text, parse_mode="HTML")
 
-        # Grafik
         try:
             chart_buf = weekly_sales_chart(daily_data, lang)
             photo = BufferedInputFile(chart_buf.read(), filename="weekly.png")
@@ -128,18 +129,18 @@ async def cmd_weekly(message: Message):
                 caption="📈 " + ("Haftalik grafik" if lang == "uz" else "Недельный график"),
                 reply_markup=back_refresh_keyboard(lang)
             )
-        except Exception as e:
-            logger.warning(f"Chart error: {e}")
-            await message.answer(
-                text,
-                reply_markup=back_refresh_keyboard(lang),
-                parse_mode="HTML"
-            )
+        except Exception as ce:
+            logger.warning(f"Chart error: {ce}")
+            await message.answer(text, reply_markup=back_refresh_keyboard(lang), parse_mode="HTML")
 
-    except UzumAuthError:
-        await msg.edit_text(t("api_invalid", lang), parse_mode="HTML")
-    except UzumAPIError as e:
-        await msg.edit_text(t("error_api", lang, error=str(e)), parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Weekly report error: {type(e).__name__}: {e}")
+        await msg.edit_text(
+            f"❌ <b>Haftalik hisobot xatosi:</b>\n<code>{type(e).__name__}: {str(e)[:150]}</code>" if lang == "uz"
+            else f"❌ <b>Ошибка недельного отчёта:</b>\n<code>{type(e).__name__}: {str(e)[:150]}</code>",
+            reply_markup=back_keyboard(lang),
+            parse_mode="HTML"
+        )
 
 
 # ─── Oylik hisobot ────────────────────────────────────────────────────────────
@@ -156,31 +157,17 @@ async def cmd_monthly(message: Message):
         orders = await get_fbs_orders_period(user["api_key"], days=30)
         stats = summarize_orders(orders)
 
-        # Haftalik bo'linish
         weekly_data = []
         for week_num in range(4):
-            week_orders = [
-                o for o in orders
-                if _is_in_week(o, week_num)
-            ]
+            week_orders = [o for o in orders if _is_in_week(o, week_num)]
             w_stats = summarize_orders(week_orders)
-            if lang == "uz":
-                week_label = f"{week_num + 1}-hafta"
-            else:
-                week_label = f"{week_num + 1} неделя"
-            weekly_data.append({
-                "week": week_label,
-                "orders": w_stats["total"],
-                "revenue": w_stats["revenue"],
-            })
+            week_label = f"{week_num + 1}-hafta" if lang == "uz" else f"{week_num + 1} неделя"
+            weekly_data.append({"week": week_label, "orders": w_stats["total"], "revenue": w_stats["revenue"]})
 
-        # Xarajatlar
         expenses_data = await get_expenses(user["api_key"], date_from=_days_ago_ms(30))
         total_expenses = 0.0
         if expenses_data:
-            total_expenses = safe_float(
-                expenses_data.get("totalExpenses") or expenses_data.get("total")
-            )
+            total_expenses = safe_float(expenses_data.get("totalExpenses") or expenses_data.get("total"))
 
         profit = stats["revenue"] - total_expenses
         profitability = (profit / stats["revenue"] * 100) if stats["revenue"] > 0 else 0
@@ -194,11 +181,7 @@ async def cmd_monthly(message: Message):
                 f"💰 Tushum: <b>{stats['revenue']:,.0f} so'm</b>\n"
             )
             if total_expenses > 0:
-                text += (
-                    f"📉 Xarajatlar: <b>{total_expenses:,.0f} so'm</b>\n"
-                    f"💵 Foyda: <b>{profit:,.0f} so'm</b>\n"
-                    f"📊 Rentabellik: <b>{profitability:.1f}%</b>\n"
-                )
+                text += f"📉 Xarajatlar: <b>{total_expenses:,.0f} so'm</b>\n💵 Foyda: <b>{profit:,.0f} so'm</b>\n📊 Rentabellik: <b>{profitability:.1f}%</b>\n"
             text += "\n<b>Haftalar bo'yicha:</b>"
             for w in weekly_data:
                 text += f"\n📅 {w['week']}: {w['orders']} ta buyurtma, {w['revenue']:,.0f} so'm"
@@ -211,18 +194,13 @@ async def cmd_monthly(message: Message):
                 f"💰 Выручка: <b>{stats['revenue']:,.0f} сум</b>\n"
             )
             if total_expenses > 0:
-                text += (
-                    f"📉 Расходы: <b>{total_expenses:,.0f} сум</b>\n"
-                    f"💵 Прибыль: <b>{profit:,.0f} сум</b>\n"
-                    f"📊 Рентабельность: <b>{profitability:.1f}%</b>\n"
-                )
+                text += f"📉 Расходы: <b>{total_expenses:,.0f} сум</b>\n💵 Прибыль: <b>{profit:,.0f} сум</b>\n📊 Рентабельность: <b>{profitability:.1f}%</b>\n"
             text += "\n<b>По неделям:</b>"
             for w in weekly_data:
                 text += f"\n📅 {w['week']}: {w['orders']} заказов, {w['revenue']:,.0f} сум"
 
         await msg.edit_text(text, parse_mode="HTML")
 
-        # Grafik
         try:
             chart_buf = monthly_sales_chart(weekly_data, lang)
             photo = BufferedInputFile(chart_buf.read(), filename="monthly.png")
@@ -231,28 +209,18 @@ async def cmd_monthly(message: Message):
                 caption="📅 " + ("Oylik grafik" if lang == "uz" else "Месячный график"),
                 reply_markup=back_refresh_keyboard(lang)
             )
-        except Exception as e:
-            logger.warning(f"Chart error: {e}")
+        except Exception as ce:
+            logger.warning(f"Chart error: {ce}")
             await message.answer(text, reply_markup=back_refresh_keyboard(lang), parse_mode="HTML")
 
-    except UzumAuthError:
-        await msg.edit_text(t("api_invalid", lang), parse_mode="HTML")
-    except UzumAPIError as e:
-        await msg.edit_text(t("error_api", lang, error=str(e)), parse_mode="HTML")
-
-
-def _is_in_week(order: dict, week_num: int) -> bool:
-    """Buyurtma qaysi haftaga tegishli (0=eng so'nggi hafta)."""
-    ts = order.get("createdAt") or order.get("orderDate") or 0
-    if not ts:
-        return False
-    try:
-        dt = datetime.datetime.fromtimestamp(int(ts) / 1000)
-        now = datetime.datetime.now()
-        days_ago = (now - dt).days
-        return week_num * 7 <= days_ago < (week_num + 1) * 7
-    except Exception:
-        return False
+    except Exception as e:
+        logger.error(f"Monthly report error: {type(e).__name__}: {e}")
+        await msg.edit_text(
+            f"❌ <b>Oylik hisobot xatosi:</b>\n<code>{type(e).__name__}: {str(e)[:150]}</code>" if lang == "uz"
+            else f"❌ <b>Ошибка месячного отчёта:</b>\n<code>{type(e).__name__}: {str(e)[:150]}</code>",
+            reply_markup=back_keyboard(lang),
+            parse_mode="HTML"
+        )
 
 
 # ─── Qaytarmalar ─────────────────────────────────────────────────────────────
@@ -270,41 +238,29 @@ async def cmd_returns(message: Message):
         today_returns = await get_returns(user["api_key"], date_from=_days_ago_ms(1))
 
         if not returns:
-            await msg.edit_text(
-                t("no_data", lang),
-                reply_markup=back_keyboard(lang),
-                parse_mode="HTML"
-            )
+            await msg.edit_text(t("no_data", lang), reply_markup=back_keyboard(lang), parse_mode="HTML")
             return
 
-        lines = [t("returns_title", lang)]
-        lines.append(t("returns_today_new", lang, count=len(today_returns)))
-        lines.append("")
-
+        lines = [t("returns_title", lang), t("returns_today_new", lang, count=len(today_returns)), ""]
         for r in returns[:15]:
             r_id = r.get("id", "—")
             reason = r.get("reason") or r.get("returnReason") or "—"
             amount = safe_float(r.get("amount") or r.get("price") or 0)
-            product = short_name(
-                r.get("productName") or r.get("title") or "—", 30
-            )
+            product = short_name(r.get("productName") or r.get("title") or "—", 30)
             lines.append(
-                f"↩️ #{r_id}: {product}\n"
-                f"   💰 {amount:,.0f} | "
+                f"↩️ #{r_id}: {product}\n   💰 {amount:,.0f} | "
                 + ("Sabab" if lang == "uz" else "Причина") + f": {reason}"
             )
 
-        text = "\n\n".join(lines)
+        await msg.edit_text("\n\n".join(lines), reply_markup=back_refresh_keyboard(lang), parse_mode="HTML")
+
+    except Exception as e:
+        logger.error(f"Returns error: {type(e).__name__}: {e}")
         await msg.edit_text(
-            text,
-            reply_markup=back_refresh_keyboard(lang),
+            f"❌ <b>Xato:</b> <code>{type(e).__name__}: {str(e)[:150]}</code>",
+            reply_markup=back_keyboard(lang),
             parse_mode="HTML"
         )
-
-    except UzumAuthError:
-        await msg.edit_text(t("api_invalid", lang), parse_mode="HTML")
-    except UzumAPIError as e:
-        await msg.edit_text(t("error_api", lang, error=str(e)), parse_mode="HTML")
 
 
 # ─── AI Maslahatchi ───────────────────────────────────────────────────────────
@@ -315,11 +271,7 @@ async def cmd_ai(message: Message):
     if not user:
         return
     lang = user.get("lang", "ru")
-    await message.answer(
-        t("ai_title", lang),
-        reply_markup=ai_keyboard(lang),
-        parse_mode="HTML"
-    )
+    await message.answer(t("ai_title", lang), reply_markup=ai_keyboard(lang), parse_mode="HTML")
 
 
 @router.callback_query(F.data == "ai_sales")
@@ -327,24 +279,17 @@ async def ai_sales_analysis(callback: CallbackQuery):
     user = await get_user(callback.from_user.id)
     lang = user.get("lang", "ru") if user else "ru"
     msg = await callback.message.answer(t("ai_thinking", lang), parse_mode="HTML")
-
     try:
         orders = await get_fbs_orders_period(user["api_key"], days=7)
         stats = summarize_orders(orders)
         products = await get_products(user["api_key"], user["shop_id"])
-
         prompt = build_sales_analysis_prompt(stats, products, lang)
         answer = await ask_gemini(prompt, lang)
-
-        await msg.edit_text(
-            f"🤖 <b>AI tahlili:</b>\n\n{answer}" if lang == "uz"
-            else f"🤖 <b>AI анализ:</b>\n\n{answer}",
-            parse_mode="HTML"
-        )
+        header = "🤖 <b>AI tahlili:</b>\n\n" if lang == "uz" else "🤖 <b>AI анализ:</b>\n\n"
+        await msg.edit_text(header + answer, parse_mode="HTML")
     except Exception as e:
         logger.error(f"AI sales error: {e}")
-        await msg.edit_text(t("error_api", lang, error=str(e)), parse_mode="HTML")
-
+        await msg.edit_text(f"❌ <code>{type(e).__name__}: {str(e)[:150]}</code>", parse_mode="HTML")
     await callback.answer()
 
 
@@ -353,23 +298,16 @@ async def ai_storage_advice(callback: CallbackQuery):
     user = await get_user(callback.from_user.id)
     lang = user.get("lang", "ru") if user else "ru"
     msg = await callback.message.answer(t("ai_thinking", lang), parse_mode="HTML")
-
     try:
         invoices = await get_invoices(user["api_key"], user["shop_id"])
         storage_items = parse_invoices(invoices)
-
         prompt = build_storage_advice_prompt(storage_items, lang)
         answer = await ask_gemini(prompt, lang)
-
-        await msg.edit_text(
-            f"🤖 <b>Ombor tavsiyasi:</b>\n\n{answer}" if lang == "uz"
-            else f"🤖 <b>Совет по складу:</b>\n\n{answer}",
-            parse_mode="HTML"
-        )
+        header = "🤖 <b>Ombor tavsiyasi:</b>\n\n" if lang == "uz" else "🤖 <b>Совет по складу:</b>\n\n"
+        await msg.edit_text(header + answer, parse_mode="HTML")
     except Exception as e:
         logger.error(f"AI storage error: {e}")
-        await msg.edit_text(t("error_api", lang, error=str(e)), parse_mode="HTML")
-
+        await msg.edit_text(f"❌ <code>{type(e).__name__}: {str(e)[:150]}</code>", parse_mode="HTML")
     await callback.answer()
 
 
@@ -377,11 +315,7 @@ async def ai_storage_advice(callback: CallbackQuery):
 async def ai_question_start(callback: CallbackQuery, state: FSMContext):
     user = await get_user(callback.from_user.id)
     lang = user.get("lang", "ru") if user else "ru"
-    await callback.message.answer(
-        t("ai_ask_question", lang),
-        reply_markup=cancel_keyboard(lang),
-        parse_mode="HTML"
-    )
+    await callback.message.answer(t("ai_ask_question", lang), reply_markup=cancel_keyboard(lang), parse_mode="HTML")
     await state.set_state(AIStates.waiting_question)
     await callback.answer()
 
@@ -395,11 +329,7 @@ async def ai_question_process(message: Message, state: FSMContext):
     if message.text and message.text.strip() == cancel_text:
         await state.clear()
         shop_name = user.get("shop_name", "—") if user else "—"
-        await message.answer(
-            t("main_menu", lang, shop_name=shop_name),
-            reply_markup=main_menu_keyboard(lang),
-            parse_mode="HTML"
-        )
+        await message.answer(t("main_menu", lang, shop_name=shop_name), reply_markup=main_menu_keyboard(lang), parse_mode="HTML")
         return
 
     question = message.text.strip() if message.text else ""
@@ -407,27 +337,15 @@ async def ai_question_process(message: Message, state: FSMContext):
         return
 
     msg = await message.answer(t("ai_thinking", lang), parse_mode="HTML")
-
-    # Kontekst qo'shish
     shop_name = user.get("shop_name", "JoyKid") if user else "JoyKid"
+
     if lang == "uz":
-        full_prompt = (
-            f"Sen Uzum marketplace ({shop_name} do'koni) savdo maslahatchisisisan. "
-            f"O'zbek tilida qisqa va amaliy javob ber (maksimum 300 so'z):\n\n{question}"
-        )
+        full_prompt = f"Sen Uzum marketplace ({shop_name} do'koni) savdo maslahatchisisisan. O'zbek tilida qisqa va amaliy javob ber (maksimum 300 so'z):\n\n{question}"
     else:
-        full_prompt = (
-            f"Ты эксперт по продажам на Uzum marketplace (магазин {shop_name}). "
-            f"Дай краткий и практичный ответ на русском (максимум 300 слов):\n\n{question}"
-        )
+        full_prompt = f"Ты эксперт по продажам на Uzum marketplace (магазин {shop_name}). Дай краткий и практичный ответ на русском (максимум 300 слов):\n\n{question}"
 
     answer = await ask_gemini(full_prompt, lang)
-
-    await msg.edit_text(
-        f"🤖 <b>AI:</b>\n\n{answer}",
-        parse_mode="HTML",
-        reply_markup=ai_keyboard(lang)
-    )
+    await msg.edit_text(f"🤖 <b>AI:</b>\n\n{answer}", parse_mode="HTML", reply_markup=ai_keyboard(lang))
     await state.clear()
 
 
@@ -437,9 +355,5 @@ async def ai_back(callback: CallbackQuery, state: FSMContext):
     user = await get_user(callback.from_user.id)
     lang = user.get("lang", "ru") if user else "ru"
     shop_name = user.get("shop_name", "—") if user else "—"
-    await callback.message.answer(
-        t("main_menu", lang, shop_name=shop_name),
-        reply_markup=main_menu_keyboard(lang),
-        parse_mode="HTML"
-    )
+    await callback.message.answer(t("main_menu", lang, shop_name=shop_name), reply_markup=main_menu_keyboard(lang), parse_mode="HTML")
     await callback.answer()
