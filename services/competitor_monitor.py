@@ -209,9 +209,10 @@ async def check_saved_urls(api_key: str, my_products: list[dict], saved_urls: li
                     f"   🏪 {info['shop']} | ⭐{info['rating']:.1f} ({info['reviews']} отз.)"
                 )
         else:
+            no_data = "Ma'lumot olinmadi" if lang == "uz" else "Данные не получены"
             lines.append(
                 f"⚠️ <b>{product_name[:30]}</b>\n"
-                f"   {'Ma\'lumot olinmadi' if lang == 'uz' else 'Данные не получены'}"
+                f"   {no_data}"
             )
         lines.append("")
 

@@ -10,16 +10,11 @@ from aiogram.fsm.state import State, StatesGroup
 
 from database import get_user
 from services.uzum_api import (
-    get_products, get_fbs_orders, get_invoices,
+    get_products, get_fbs_orders,
     summarize_orders, calc_total_qty, format_product_skus,
-    UzumAuthError, UzumAPIError,
     _days_ago_ms, _now_ms
 )
-from services.storage_tracker import parse_invoices, format_storage_report, get_storage_alerts
-from services.competitor_monitor import (
-    get_product_info_by_url, check_saved_urls,
-    format_single_product_report
-)
+from services.storage_tracker import get_storage_alerts
 from locales.i18n import t
 from utils.keyboards import (
     main_menu_keyboard, settings_keyboard,
@@ -216,10 +211,92 @@ async def cmd_storage(message: Message):
     msg = await message.answer(t("loading", lang), parse_mode="HTML")
 
     try:
-        invoices = await get_invoices(user["api_key"], user["shop_id"])
-        storage_items = parse_invoices(invoices)
-        report = format_storage_report(storage_items, lang)
-        await msg.edit_text(report, parse_mode="HTML")
+        # FBS sotuvchi uchun ombor = mahsulot qoldiqlari asosida
+        products = await get_products(user["api_key"], user["shop_id"])
+
+        if not products:
+            await msg.edit_text(t("no_data", lang), parse_mode="HTML")
+            return
+
+        from utils.helpers import stock_icon, safe_float, safe_int, short_name
+
+        total_products = len(products)
+        total_qty = sum(calc_total_qty(p) for p in products)
+
+        low_list = []   # ≤5
+        out_list = []   # 0
+        ok_list = []    # >15
+        warn_list = []  # 6-15
+
+        for p in products:
+            name = short_name(p.get("title") or p.get("name") or "—", 35)
+            qty = calc_total_qty(p)
+            avg = 0.0
+            forecast = 9999
+            for sku in p.get("skuList", [])[:1]:
+                avg = safe_float(sku.get("avgdsales", 0))
+                forecast = safe_int(sku.get("forecastOutOfStock", 9999))
+
+            item = {"name": name, "qty": qty, "avg": avg, "forecast": forecast}
+            if qty == 0:
+                out_list.append(item)
+            elif qty <= 5:
+                low_list.append(item)
+            elif qty <= 15:
+                warn_list.append(item)
+            else:
+                ok_list.append(item)
+
+        if lang == "uz":
+            text = (
+                f"🏭 <b>Ombor holati (FBS)</b>\n\n"
+                f"📊 Jami tovar turi: {total_products} ta\n"
+                f"📦 Umumiy qoldiq: {total_qty} dona\n\n"
+            )
+            if out_list:
+                text += f"🚫 <b>Tugagan ({len(out_list)} ta):</b>\n"
+                for i in out_list[:10]:
+                    text += f"  • {i['name']}\n"
+                text += "\n"
+            if low_list:
+                text += f"⚠️ <b>Kam qolgan — ≤5 dona ({len(low_list)} ta):</b>\n"
+                for i in low_list[:10]:
+                    d = f" | ⏳ {i['forecast']} kun" if i['forecast'] < 9999 else ""
+                    text += f"  • {i['name']}: {i['qty']} dona{d}\n"
+                text += "\n"
+            if warn_list:
+                text += f"🟡 <b>Diqqat — 6-15 dona ({len(warn_list)} ta):</b>\n"
+                for i in warn_list[:10]:
+                    text += f"  • {i['name']}: {i['qty']} dona\n"
+                text += "\n"
+            if ok_list:
+                text += f"✅ <b>Yaxshi zaxira — >15 dona ({len(ok_list)} ta)</b>"
+        else:
+            text = (
+                f"🏭 <b>Состояние склада (FBS)</b>\n\n"
+                f"📊 Всего видов: {total_products}\n"
+                f"📦 Общий остаток: {total_qty} шт.\n\n"
+            )
+            if out_list:
+                text += f"🚫 <b>Закончились ({len(out_list)} шт.):</b>\n"
+                for i in out_list[:10]:
+                    text += f"  • {i['name']}\n"
+                text += "\n"
+            if low_list:
+                text += f"⚠️ <b>Мало — ≤5 шт. ({len(low_list)} шт.):</b>\n"
+                for i in low_list[:10]:
+                    d = f" | ⏳ {i['forecast']} дн." if i['forecast'] < 9999 else ""
+                    text += f"  • {i['name']}: {i['qty']} шт.{d}\n"
+                text += "\n"
+            if warn_list:
+                text += f"🟡 <b>Внимание — 6-15 шт. ({len(warn_list)} шт.):</b>\n"
+                for i in warn_list[:10]:
+                    text += f"  • {i['name']}: {i['qty']} шт.\n"
+                text += "\n"
+            if ok_list:
+                text += f"✅ <b>Хороший запас — >15 шт. ({len(ok_list)} шт.)</b>"
+
+        await msg.edit_text(text.strip(), parse_mode="HTML")
 
     except Exception as e:
         logger.error(f"Storage error: {e}")
@@ -243,9 +320,6 @@ async def cmd_report_today(message: Message):
         orders = await get_fbs_orders(user["api_key"], date_from=_days_ago_ms(1))
         stats = summarize_orders(orders)
         products = await get_products(user["api_key"], user["shop_id"])
-        invoices = await get_invoices(user["api_key"], user["shop_id"])
-        storage_items = parse_invoices(invoices)
-        alerts = get_storage_alerts(storage_items)
 
         total_products = len(products)
         # Barcha SKU lar bo'yicha to'g'ri qoldiq
@@ -269,11 +343,7 @@ async def cmd_report_today(message: Message):
                 f"  💰 Tushum: {stats['revenue']:,.0f} so'm\n\n"
                 f"📦 <b>Mahsulotlar:</b>\n"
                 f"  Tovar turlari: {total_products} ta\n"
-                f"  Jami qoldiq (barcha SKU): {total_qty} dona\n\n"
-                f"🏭 <b>Ombor:</b>\n"
-                f"  💸 Pullik: {len(alerts['paid'])} | "
-                f"🚨 Xavfli: {len(alerts['alert'])} | "
-                f"⚠️ Ogohlantirish: {len(alerts['warn'])}"
+                f"  Jami qoldiq (barcha SKU): {total_qty} dona"
             )
         else:
             text = (
@@ -283,11 +353,7 @@ async def cmd_report_today(message: Message):
                 f"  💰 Выручка: {stats['revenue']:,.0f} сум\n\n"
                 f"📦 <b>Товары:</b>\n"
                 f"  Видов товаров: {total_products}\n"
-                f"  Общий остаток (все SKU): {total_qty} шт.\n\n"
-                f"🏭 <b>Склад:</b>\n"
-                f"  💸 Платное: {len(alerts['paid'])} | "
-                f"🚨 Критично: {len(alerts['alert'])} | "
-                f"⚠️ Внимание: {len(alerts['warn'])}"
+                f"  Общий остаток (все SKU): {total_qty} шт."
             )
 
         if low_stock:
