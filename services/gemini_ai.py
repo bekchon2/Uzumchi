@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
+GEMINI_URL_PRO = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent"
 
 # Windows SSL muammosini hal qilish
 SSL_CONTEXT = ssl.create_default_context()
@@ -29,6 +30,21 @@ async def ask_gemini(prompt: str, lang: str = "ru") -> str:
         if lang == "uz":
             return "⚠️ Gemini API kaliti sozlanmagan. GEMINI_API_KEY ni .env ga qo'shing."
         return "⚠️ Ключ Gemini API не настроен. Добавьте GEMINI_API_KEY в .env."
+
+    # Kalit formatini tekshirish
+    if not GEMINI_API_KEY.startswith("AIzaSy"):
+        logger.warning(f"Gemini kalit formati noto'g'ri: {GEMINI_API_KEY[:10]}...")
+        if lang == "uz":
+            return (
+                "⚠️ Gemini API kaliti noto'g'ri format.\n\n"
+                "To'g'ri kalit: AIzaSy... bilan boshlanadi\n"
+                "📌 https://aistudio.google.com/app/apikey dan oling"
+            )
+        return (
+            "⚠️ Неверный формат ключа Gemini API.\n\n"
+            "Правильный ключ начинается с: AIzaSy...\n"
+            "📌 Получите на https://aistudio.google.com/app/apikey"
+        )
 
     payload = {
         "contents": [

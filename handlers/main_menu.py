@@ -10,7 +10,7 @@ from aiogram.fsm.state import State, StatesGroup
 
 from database import get_user
 from services.uzum_api import (
-    get_products, get_fbs_orders,
+    get_products, get_fbs_orders, get_sales_stats_from_products,
     summarize_orders, calc_total_qty, format_product_skus,
     _days_ago_ms, _now_ms
 )
@@ -163,6 +163,33 @@ async def cmd_orders(message: Message):
         orders = await get_fbs_orders(user["api_key"], date_from=_days_ago_ms(1))
         stats = summarize_orders(orders)
 
+        # Agar buyurtmalar API ruxsat bermasa — mahsulot statistikasidan foydalanish
+        if stats["total"] == 0:
+            product_stats = await get_sales_stats_from_products(user["api_key"], user["shop_id"])
+            if product_stats.get("total_sold", 0) > 0:
+                if lang == "uz":
+                    text = (
+                        f"🛒 <b>Buyurtmalar statistikasi</b>\n"
+                        f"<i>(API ruxsati yo'q — tovar ma'lumotlaridan)</i>\n\n"
+                        f"📦 Jami sotilgan (umumiy): <b>{product_stats['total_sold']}</b> dona\n"
+                        f"↩️ Qaytarilgan: <b>{product_stats['total_returned']}</b> dona\n"
+                        f"💰 Taxminiy tushum: <b>{product_stats['total_revenue']:,.0f} so'm</b>\n\n"
+                        f"⚠️ <i>Aniq buyurtmalar uchun seller.uzum.uz da API kalitga "
+                        f"«Buyurtmalar» ruxsatini bering</i>"
+                    )
+                else:
+                    text = (
+                        f"🛒 <b>Статистика продаж</b>\n"
+                        f"<i>(нет доступа к API заказов — из данных товаров)</i>\n\n"
+                        f"📦 Всего продано (суммарно): <b>{product_stats['total_sold']}</b> шт.\n"
+                        f"↩️ Возвращено: <b>{product_stats['total_returned']}</b> шт.\n"
+                        f"💰 Ориентировочная выручка: <b>{product_stats['total_revenue']:,.0f} сум</b>\n\n"
+                        f"⚠️ <i>Для точных данных по заказам выдайте ключу API "
+                        f"разрешение «Заказы» в seller.uzum.uz</i>"
+                    )
+                await msg.edit_text(text, parse_mode="HTML")
+                return
+
         if lang == "uz":
             text = (
                 f"🛒 <b>Buyurtmalar</b> (so'nggi 24 soat)\n\n"
@@ -192,8 +219,9 @@ async def cmd_orders(message: Message):
                 order_id = o.get("id", "—")
                 price = safe_float(o.get("finalPrice") or o.get("price") or o.get("orderPrice") or 0)
                 text += f"\n{icon} #{order_id} — {format_price(price, lang)}"
+        elif stats["total"] == 0:
+            text += "\n\n" + ("📭 Bugun buyurtma yo'q" if lang == "uz" else "📭 Заказов сегодня нет")
 
-        # Tugmasiz — faqat matn
         await msg.edit_text(text, parse_mode="HTML")
 
     except Exception as e:
@@ -444,59 +472,49 @@ async def competitor_url_received(message: Message, state: FSMContext):
         return
 
     # URL tekshiruvi
-    if "uzum.uz" not in url.lower() and not url.startswith("http"):
+    if "uzum.uz" not in url.lower():
         await message.answer(
             "❌ Bu Uzum URL emas. uzum.uz dan havola yuboring." if lang == "uz"
             else "❌ Это не Uzum URL. Отправьте ссылку с uzum.uz"
         )
         return
 
-    await state.update_data(url=url)
-
-    # Tovar nomi so'rash
-    if lang == "uz":
-        text = "📝 Bu tovar uchun qisqa nom kiriting (masalan: <i>Suv shari qizil</i>):"
-    else:
-        text = "📝 Введите короткое название для этого товара (например: <i>Водяной шар красный</i>):"
-    await message.answer(text, parse_mode="HTML")
-    await state.set_state(CompetitorStates.waiting_url_name)
-
-
-@router.message(CompetitorStates.waiting_url_name)
-async def competitor_url_name_received(message: Message, state: FSMContext):
-    user = await get_user(message.from_user.id)
-    lang = user.get("lang", "ru") if user else "ru"
-
-    product_name = (message.text or "").strip()
-    if not product_name:
-        return
-
-    data = await state.get_data()
-    url = data.get("url", "")
-
+    # Darhol tekshira boshlaymiz — nom so'ramaymiz
     msg = await message.answer(
-        "⏳ Tovar ma'lumotlari tekshirilmoqda..." if lang == "uz"
-        else "⏳ Проверяю данные товара..."
+        "⏳ Tovar ma'lumotlari olinmoqda..." if lang == "uz"
+        else "⏳ Получаю данные о товаре..."
     )
 
-    # URL dan tovar ma'lumotlarini olish
     from services.competitor_monitor import get_product_info_by_url
     info = await get_product_info_by_url(url)
 
     if not info:
         await msg.edit_text(
-            "⚠️ URL dan ma'lumot olinmadi. URL to'g'riligini tekshiring." if lang == "uz"
-            else "⚠️ Не удалось получить данные по URL. Проверьте правильность ссылки."
+            "⚠️ URL dan ma'lumot olinmadi.\n\n"
+            "• Uzum tovar sahifasining to'g'ri URL ekanligini tekshiring\n"
+            "• URL bunday ko'rinishda bo'lishi kerak:\n"
+            "<code>https://uzum.uz/ru/product/tovar-nomi-123456</code>" if lang == "uz"
+            else
+            "⚠️ Не удалось получить данные по URL.\n\n"
+            "• Проверьте что это правильная ссылка на товар Uzum\n"
+            "• Ссылка должна выглядеть так:\n"
+            "<code>https://uzum.uz/ru/product/tovar-imya-123456</code>",
+            parse_mode="HTML"
         )
         await state.clear()
         return
+
+    # Tovar nomini avtomatik olish
+    product_name = info.get("title") or "Tovar"
+    # Nomni qisqartirish (30 belgidan oshmasin)
+    product_name_short = product_name[:40].strip()
 
     # DB ga saqlash
     from database import add_product_url
     await add_product_url(
         user_id=message.from_user.id,
-        shop_id=user["shop_id"],
-        product_name=product_name,
+        shop_id=user["shop_id"] if user else 0,
+        product_name=product_name_short,
         uzum_url=url
     )
 
@@ -505,32 +523,25 @@ async def competitor_url_name_received(message: Message, state: FSMContext):
     my_price = 0.0
     for p in products:
         p_title = (p.get("title") or p.get("name") or "").lower()
-        if product_name.lower() in p_title or p_title in product_name.lower():
+        pn_lower = product_name_short.lower()
+        # Umumiy so'z bormi
+        p_words = set(p_title.split())
+        n_words = set(pn_lower.split())
+        if p_words & n_words:
             for sku in p.get("skuList", [])[:1]:
                 my_price = safe_float(sku.get("price") or sku.get("purchasePrice"))
             break
 
-    report = format_single_product_report(product_name, my_price, info, lang)
-
-    if lang == "uz":
-        success = f"✅ <b>'{product_name}' saqlandi!</b>\n\n{report}"
-    else:
-        success = f"✅ <b>'{product_name}' сохранён!</b>\n\n{report}"
-
-    await msg.edit_text(success, parse_mode="HTML")
+    from services.competitor_monitor import format_single_product_report
+    report = format_single_product_report(product_name_short, my_price, info, lang)
+    await msg.edit_text(report, parse_mode="HTML")
     await state.clear()
 
 
 @router.message(CompetitorStates.waiting_product_name)
 async def competitor_search_process(message: Message, state: FSMContext):
-    """Eski qidiruv — endi URL ga yo'naltiradi."""
+    """Eski handler — endi URL kerak."""
     await state.clear()
-    user = await get_user(message.from_user.id)
-    lang = user.get("lang", "ru") if user else "ru"
-    await message.answer(
-        "🔗 Iltimos Uzum tovar havolasini yuboring." if lang == "uz"
-        else "🔗 Пожалуйста, отправьте ссылку на товар в Uzum."
-    )
 
 
 @router.callback_query(F.data == "competitor_list")

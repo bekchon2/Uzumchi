@@ -121,63 +121,75 @@ def calc_total_qty(product: dict) -> int:
     return sum(int(s.get("quantityActive") or 0) for s in product.get("skuList", []))
 
 
-def _get_sku_variant_name(sku: dict) -> str:
-    """SKU dan variant nomini olish — barcha formatlarni sinab ko'radi."""
+def _get_sku_variant_name(sku: dict, lang: str = "ru") -> str:
+    """
+    SKU dan variant nomini olish.
+    Log da aniqlandi:
+      characteristicsList = [
+        {"characteristicTitle": {"uz": "Rang", "ru": "Цвет"},
+         "characteristicValue": {"uz": "Alvon", "ru": "Алый"}}
+      ]
+      skuTitle = "АЛЫЙ"
+    """
 
-    # Format 1: characteristics = [{"charName":"Цвет","charValue":"Красный"}]
-    chars = sku.get("characteristics") or []
-    if chars and isinstance(chars, list):
+    # ✅ FORMAT 1 (aniq tasdiqlangan): characteristicsList
+    char_list = sku.get("characteristicsList") or []
+    if char_list and isinstance(char_list, list):
         vals = []
-        for c in chars:
+        for c in char_list:
             if not isinstance(c, dict):
                 continue
-            val = (c.get("charValue") or c.get("value")
-                   or c.get("name") or c.get("title") or "")
+            char_val = c.get("characteristicValue") or {}
+            if isinstance(char_val, dict):
+                # Foydalanuvchi tiliga mos qiymat
+                val = char_val.get(lang) or char_val.get("ru") or char_val.get("uz") or ""
+            else:
+                val = str(char_val)
             if val and str(val).strip():
                 vals.append(str(val).strip())
         if vals:
             return " / ".join(vals)
 
-    # Format 2: charValues = [{"value":"..."}]
+    # ✅ FORMAT 2: skuTitle (to'g'ridan SKU nomi)
+    sku_title = sku.get("skuTitle") or ""
+    if sku_title and str(sku_title).strip():
+        return str(sku_title).strip()
+
+    # Format 3: characteristics (eski format)
+    chars = sku.get("characteristics") or []
+    if chars and isinstance(chars, list):
+        vals = []
+        for c in chars:
+            if isinstance(c, dict):
+                val = c.get("charValue") or c.get("value") or c.get("name") or ""
+            else:
+                val = str(c) if c else ""
+            if val and str(val).strip():
+                vals.append(str(val).strip())
+        if vals:
+            return " / ".join(vals)
+
+    # Format 4: charValues
     char_values = sku.get("charValues") or []
     if char_values and isinstance(char_values, list):
         vals = []
         for c in char_values:
             if isinstance(c, dict):
-                val = (c.get("value") or c.get("title")
-                       or c.get("name") or c.get("charValue") or "")
-                if val and str(val).strip():
-                    vals.append(str(val).strip())
+                val = c.get("value") or c.get("title") or c.get("name") or ""
+            else:
+                val = str(c) if c else ""
+            if val and str(val).strip():
+                vals.append(str(val).strip())
         if vals:
             return " / ".join(vals)
 
-    # Format 3: barcha dictionary fieldlarni tekshirish
-    # Uzum SKU larda "barName", "colorName", "sizeName" kabi bo'lishi mumkin
-    color_keys = ["color", "Color", "colorName", "colour", "rang", "renk"]
-    size_keys = ["size", "Size", "sizeName", "o'lcham", "razmer"]
+    # Format 5: sellerItemCode (sotuvchi o'z kodi)
+    seller_code = sku.get("sellerItemCode") or ""
+    if seller_code and str(seller_code).strip():
+        return str(seller_code).strip()
 
-    parts = []
-    for key in color_keys:
-        val = sku.get(key)
-        if val and str(val).strip() not in ("", "None", "null"):
-            parts.append(str(val).strip())
-            break
-    for key in size_keys:
-        val = sku.get(key)
-        if val and str(val).strip() not in ("", "None", "null"):
-            parts.append(str(val).strip())
-            break
-
-    if parts:
-        return " / ".join(parts)
-
-    # Format 4: title yoki name
-    title = sku.get("title") or sku.get("name") or ""
-    if title:
-        return str(title)[:40]
-
-    # Oxirgi: ID
-    sku_id = sku.get("id") or sku.get("skuId") or "?"
+    # Oxirgi: sku ID
+    sku_id = sku.get("skuId") or sku.get("id") or "?"
     return f"#{sku_id}"
 
 
@@ -222,7 +234,7 @@ def format_product_skus(product: dict, lang: str = "ru") -> str:
         for sku in skus:
             qty = int(sku.get("quantityActive") or 0)
             price = safe_float(sku.get("price") or sku.get("purchasePrice"))
-            variant = _get_sku_variant_name(sku)
+            variant = _get_sku_variant_name(sku, lang)
             sku_icon = stock_icon(qty)
             if lang == "uz":
                 lines.append(f"   {sku_icon} {variant}: <b>{qty}</b> dona | {price:,.0f} so'm")
@@ -248,42 +260,31 @@ async def get_fbs_orders(
     date_to: int = None,
 ) -> list[dict]:
     """
-    Buyurtmalar olish.
-    seller.uzum.uz/seller/finances?filter=ORDERS sahifasida ishlatiladigan
-    endpointlarni sinab ko'radi.
+    Buyurtmalar olish. 5 ta endpoint sinab ko'riladi.
+    Agar hamma 403 bo'lsa — bo'sh list qaytaradi.
     """
     if date_from is None:
         date_from = _days_ago_ms(1)
     if date_to is None:
         date_to = _now_ms()
 
-    # Endpointlar ro'yxati — seller finances sahifasi ishlatiyadiganlar
     endpoints = [
-        # FBS buyurtmalar (asosiy)
         ("/v2/fbs/orders",
          {"dateFrom": date_from, "dateTo": date_to, "limit": 100, "offset": 0},
          lambda d: (d.get("payload", {}).get("orders") or d.get("orders") or
                     (d if isinstance(d, list) else []))),
-
-        # Moliyaviy buyurtmalar
         ("/v1/finance/orders",
          {"dateFrom": date_from, "dateTo": date_to, "limit": 100, "offset": 0},
          lambda d: (d.get("orderItems") or d.get("orders") or d.get("content") or
                     (d if isinstance(d, list) else []))),
-
-        # FBO buyurtmalar (agar FBS ishlamasa)
         ("/v1/order/list",
          {"dateFrom": date_from, "dateTo": date_to, "limit": 100},
          lambda d: (d.get("orders") or d.get("orderList") or
                     (d if isinstance(d, list) else []))),
-
-        # Eski v1 order
         ("/v1/order",
          {"dateFrom": date_from, "dateTo": date_to, "limit": 100},
          lambda d: (d.get("orders") or d.get("orderList") or
                     (d if isinstance(d, list) else []))),
-
-        # seller-openapi v2 orders
         ("/v2/order",
          {"dateFrom": date_from, "dateTo": date_to, "limit": 100},
          lambda d: (d.get("orders") or d.get("payload", {}).get("orders") or
@@ -296,19 +297,61 @@ async def get_fbs_orders(
             orders = extractor(data)
             if orders and isinstance(orders, list) and len(orders) > 0:
                 logger.info(f"[ORDERS] ✅ {endpoint}: {len(orders)} ta buyurtma")
-                logger.info(f"[ORDERS] Namuna: status={orders[0].get('status', '?')}, keys={list(orders[0].keys())[:8]}")
                 return orders
             else:
-                # Bo'sh javob — raw ni log qilish
-                raw = json.dumps(data, ensure_ascii=False)[:400]
+                raw = json.dumps(data, ensure_ascii=False)[:300]
                 logger.info(f"[ORDERS] {endpoint}: bo'sh. Raw: {raw}")
         except UzumAuthError:
             logger.warning(f"[ORDERS] {endpoint}: 403 ruxsat yo'q")
         except Exception as e:
             logger.warning(f"[ORDERS] {endpoint}: {e}")
 
-    logger.error("[ORDERS] Hamma endpoint bo'sh yoki 403!")
+    logger.warning("[ORDERS] Hamma endpoint 403 — ruxsat kerak!")
     return []
+
+
+async def get_sales_stats_from_products(api_key: str, shop_id: int) -> dict:
+    """
+    API buyurtmalar uchun ruxsat bermasa — mahsulot SKU lardan
+    quantitySold asosida sotuv statistikasini hisoblash.
+    Bu taxminiy ma'lumot.
+    """
+    try:
+        products = await get_products(api_key, shop_id)
+        total_sold = 0
+        total_returned = 0
+        total_revenue = 0.0
+        low_stock_count = 0
+        out_count = 0
+
+        for p in products:
+            for sku in p.get("skuList", []):
+                sold = int(sku.get("quantitySold") or 0)
+                returned = int(sku.get("quantityReturned") or 0)
+                price = float(sku.get("price") or sku.get("purchasePrice") or 0)
+                qty = int(sku.get("quantityActive") or 0)
+                avg = float(sku.get("avgdsales") or 0)
+
+                total_sold += sold
+                total_returned += returned
+                total_revenue += sold * price
+
+                if qty == 0:
+                    out_count += 1
+                elif qty <= 5:
+                    low_stock_count += 1
+
+        return {
+            "total_sold": total_sold,
+            "total_returned": total_returned,
+            "total_revenue": total_revenue,
+            "low_stock_count": low_stock_count,
+            "out_count": out_count,
+            "products_count": len(products),
+        }
+    except Exception as e:
+        logger.warning(f"get_sales_stats_from_products: {e}")
+        return {}
 
 
 async def get_fbs_orders_period(api_key: str, days: int = 7) -> list[dict]:
