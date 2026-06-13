@@ -387,15 +387,22 @@ async def get_invoices(api_key: str, shop_id: int) -> list[dict]:
 
 async def get_returns(api_key: str, date_from: int = None, date_to: int = None) -> list[dict]:
     """
-    Qaytarmalar.
-    Log da to'liq raw javob.
+    Qaytarmalar. Parametrlar turlicha bo'lishi mumkin.
     """
     if date_from is None:
-        date_from = _days_ago_ms(30)
+        date_from = _days_ago_ms(90)  # 90 kun — keng oraliq
     if date_to is None:
         date_to = _now_ms()
 
-    params = {"dateFrom": date_from, "dateTo": date_to}
+    # Turli parametr nomlari bilan sinab ko'rish
+    params_variants = [
+        {"dateFrom": date_from, "dateTo": date_to},
+        {"from": date_from, "to": date_to},
+        {"startDate": date_from, "endDate": date_to},
+        {"limit": 100, "offset": 0},  # parametrsiz ham
+    ]
+    # Birinchi variantni ishlatamiz
+    params = params_variants[0]
 
     for endpoint in ["/v1/return", "/v2/return"]:
         try:
