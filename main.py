@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 from aiohttp import web
+import aiohttp
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 from dotenv import load_dotenv
@@ -16,6 +17,8 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 PORT = int(os.getenv("PORT", 8080))
+RENDER_URL = os.getenv("RENDER_EXTERNAL_URL", "")  # Render avtomatik beradi
+SELF_PING_INTERVAL = 10 * 60  # 10 daqiqa
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,6 +33,29 @@ async def ping_handler(request):
 
 async def health_handler(request):
     return web.Response(text="OK")
+
+
+async def self_ping():
+    """
+    Render free tier da xizmat uxlab qolmasligi uchun o'zini-o'zi ping qiladi.
+    RENDER_EXTERNAL_URL bo'lmasa (local rejim) — xavfsiz no-op (faqat log).
+    """
+    if not RENDER_URL:
+        logger.info("self-ping disabled (local mode)")
+        return
+
+    url = f"{RENDER_URL}/ping"
+    logger.info(f"Self-ping started: {url}")
+    while True:
+        await asyncio.sleep(SELF_PING_INTERVAL)
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    url, timeout=aiohttp.ClientTimeout(total=10)
+                ) as resp:
+                    logger.info(f"Self-ping: {resp.status}")
+        except Exception as e:
+            logger.warning(f"Self-ping error: {e}")
 
 
 async def main():
@@ -62,6 +88,9 @@ async def main():
     site = web.TCPSite(runner, "0.0.0.0", PORT)
     await site.start()
     logger.info(f"Web server started on port {PORT}")
+
+    # Self-ping keep-alive (Render free tier) — background task
+    asyncio.create_task(self_ping())
 
     logger.info("Bot starting polling...")
     try:

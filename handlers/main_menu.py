@@ -12,6 +12,7 @@ from database import get_user
 from services.uzum_api import (
     get_products, get_fbs_orders, get_sales_stats_from_products,
     summarize_orders, calc_total_qty, format_product_skus,
+    get_finance_orders, summarize_finance_orders,
     _days_ago_ms, _now_ms
 )
 from services.competitor_monitor import (
@@ -190,25 +191,29 @@ async def cmd_orders(message: Message):
                 await msg.edit_text(text, parse_mode="HTML")
                 return
 
-        if lang == "uz":
-            text = (
-                f"🛒 <b>Buyurtmalar</b> (so'nggi 24 soat)\n\n"
-                f"📊 Jami: <b>{stats['total']}</b>\n"
-                f"✅ Yetkazildi: <b>{stats['delivered']}</b>\n"
-                f"🔄 Jarayonda: <b>{stats['processing']}</b>\n"
-                f"🚚 Yo'lda: <b>{stats['shipped']}</b>\n"
-                f"❌ Bekor: <b>{stats['cancelled']}</b>\n"
-                f"💰 Tushum: <b>{stats['revenue']:,.0f} so'm</b>"
+        text = (
+            t("orders_title", lang) + "\n\n"
+            + t("orders_summary", lang,
+                total=stats["total"], delivered=stats["delivered"],
+                processing=stats["processing"], shipped=stats["shipped"],
+                cancelled=stats["cancelled"], revenue=stats["revenue"])
+        )
+
+        # Finance overlay (conditional) — komissiya va sof foyda
+        try:
+            fin_raw = await get_finance_orders(
+                user["api_key"], date_from=_days_ago_ms(1), date_to=_now_ms()
             )
-        else:
-            text = (
-                f"🛒 <b>Заказы</b> (последние 24 часа)\n\n"
-                f"📊 Всего: <b>{stats['total']}</b>\n"
-                f"✅ Доставлено: <b>{stats['delivered']}</b>\n"
-                f"🔄 В обработке: <b>{stats['processing']}</b>\n"
-                f"🚚 В пути: <b>{stats['shipped']}</b>\n"
-                f"❌ Отменено: <b>{stats['cancelled']}</b>\n"
-                f"💰 Выручка: <b>{stats['revenue']:,.0f} сум</b>"
+            finance = summarize_finance_orders(fin_raw)
+        except Exception as fe:
+            logger.warning(f"Orders finance fetch failed: {fe}")
+            finance = {}
+
+        if finance and finance.get("revenue", 0) > 0:
+            text += (
+                "\n"
+                + t("finance_commission", lang, commission=finance["commission"]) + "\n"
+                + t("finance_net_profit", lang, profit=finance["net_profit"])
             )
 
         if orders:
@@ -394,6 +399,23 @@ async def cmd_report_today(message: Message):
         if out_of_stock:
             text += "\n\n" + t("out_of_stock_header", lang) + "\n"
             text += "\n".join(f"  🚫 {n}" for n in out_of_stock[:10])
+
+        # Finance overlay (conditional) — komissiya va sof foyda
+        try:
+            fin_raw = await get_finance_orders(
+                user["api_key"], date_from=_days_ago_ms(1), date_to=_now_ms()
+            )
+            finance = summarize_finance_orders(fin_raw)
+        except Exception as fe:
+            logger.warning(f"Daily report finance fetch failed: {fe}")
+            finance = {}
+
+        if finance and finance.get("revenue", 0) > 0:
+            text += (
+                "\n\n"
+                + t("finance_commission", lang, commission=finance["commission"]) + "\n"
+                + t("finance_net_profit", lang, profit=finance["net_profit"])
+            )
 
         # Tugmasiz — faqat matn
         await msg.edit_text(text, parse_mode="HTML")

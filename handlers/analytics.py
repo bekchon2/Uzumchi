@@ -13,6 +13,7 @@ from database import get_user
 from services.uzum_api import (
     get_fbs_orders_period, get_returns, get_expenses,
     get_products, get_invoices, summarize_orders,
+    get_finance_orders, summarize_finance_orders,
     _days_ago_ms, _now_ms
 )
 from services.storage_tracker import parse_invoices, get_storage_alerts
@@ -96,28 +97,39 @@ async def cmd_weekly(message: Message):
         stats = summarize_orders(orders)
         daily_data = _build_daily_data(orders, days=7)
 
-        if lang == "uz":
-            text = (
-                f"📈 <b>Haftalik hisobot</b> (so'nggi 7 kun)\n\n"
-                f"📦 Jami buyurtmalar: <b>{stats['total']}</b>\n"
-                f"✅ Yetkazildi: <b>{stats['delivered']}</b>\n"
-                f"❌ Bekor qilindi: <b>{stats['cancelled']}</b>\n"
-                f"💰 Tushum: <b>{stats['revenue']:,.0f} so'm</b>\n\n"
-                f"📊 <b>Kunlik:</b>"
+        # Finance overlay (conditional) — 7 kunlik oyna bo'yicha agregatlar
+        finance = {}
+        try:
+            fin_raw = await get_finance_orders(
+                user["api_key"], date_from=_days_ago_ms(7), date_to=_now_ms()
             )
+            finance = summarize_finance_orders(fin_raw)
+        except Exception as fe:
+            logger.warning(f"Weekly finance fetch failed: {fe}")
+
+        text = (
+            t("report_weekly", lang) + "\n\n"
+            + t("report_weekly_body", lang,
+                total=stats["total"], delivered=stats["delivered"],
+                cancelled=stats["cancelled"], revenue=stats["revenue"])
+        )
+
+        if finance and finance.get("revenue", 0) > 0:
+            text += (
+                "\n"
+                + t("finance_commission", lang, commission=finance["commission"]) + "\n"
+                + t("finance_logistics", lang, logistics=finance["logistics"]) + "\n"
+                + t("finance_net_profit", lang, profit=finance["net_profit"]) + "\n"
+                + t("finance_margin", lang, margin=finance["margin_pct"])
+            )
+
+        text += "\n\n" + t("report_weekly_daily_header", lang)
+        if lang == "uz":
             for d in daily_data:
                 bar = "█" * min(d["orders"], 15) if d["orders"] > 0 else "░"
                 rev = f" ({d['revenue']:,.0f} so'm)" if d["revenue"] > 0 else ""
                 text += f"\n{d['date']}: {bar} {d['orders']} ta{rev}"
         else:
-            text = (
-                f"📈 <b>Недельный отчёт</b> (последние 7 дней)\n\n"
-                f"📦 Всего заказов: <b>{stats['total']}</b>\n"
-                f"✅ Доставлено: <b>{stats['delivered']}</b>\n"
-                f"❌ Отменено: <b>{stats['cancelled']}</b>\n"
-                f"💰 Выручка: <b>{stats['revenue']:,.0f} сум</b>\n\n"
-                f"📊 <b>По дням:</b>"
-            )
             for d in daily_data:
                 bar = "█" * min(d["orders"], 15) if d["orders"] > 0 else "░"
                 rev = f" ({d['revenue']:,.0f} сум)" if d["revenue"] > 0 else ""
@@ -169,39 +181,52 @@ async def cmd_monthly(message: Message):
         profit = stats["revenue"] - total_expenses
         profitability = (profit / stats["revenue"] * 100) if stats["revenue"] > 0 else 0
 
-        if lang == "uz":
-            text = (
-                f"📅 <b>Oylik hisobot</b> (so'nggi 30 kun)\n\n"
-                f"📦 Jami buyurtmalar: <b>{stats['total']}</b>\n"
-                f"✅ Yetkazildi: <b>{stats['delivered']}</b>\n"
-                f"❌ Bekor: <b>{stats['cancelled']}</b>\n"
-                f"💰 Tushum: <b>{stats['revenue']:,.0f} so'm</b>\n"
+        # Finance overlay (conditional) — per-order finance fieldlardan agregatlar
+        finance = {}
+        try:
+            fin_raw = await get_finance_orders(
+                user["api_key"], date_from=_days_ago_ms(30), date_to=_now_ms()
             )
-            if total_expenses > 0:
+            finance = summarize_finance_orders(fin_raw)
+        except Exception as fe:
+            logger.warning(f"Monthly finance fetch failed: {fe}")
+
+        text = (
+            t("report_monthly", lang) + "\n\n"
+            + t("report_monthly_body", lang,
+                total=stats["total"], delivered=stats["delivered"],
+                cancelled=stats["cancelled"], revenue=stats["revenue"])
+            + "\n"
+        )
+
+        if finance and finance.get("revenue", 0) > 0:
+            text += (
+                t("finance_commission", lang, commission=finance["commission"]) + "\n"
+                + t("finance_logistics", lang, logistics=finance["logistics"]) + "\n"
+                + t("finance_net_profit", lang, profit=finance["net_profit"]) + "\n"
+                + t("finance_margin", lang, margin=finance["margin_pct"]) + "\n"
+            )
+        elif total_expenses > 0:
+            # Fallback: get_expenses asosidagi coarse figura
+            if lang == "uz":
                 text += (
                     f"📉 Xarajatlar: <b>{total_expenses:,.0f} so'm</b>\n"
                     f"💵 Foyda: <b>{profit:,.0f} so'm</b>\n"
                     f"📊 Rentabellik: <b>{profitability:.1f}%</b>\n"
                 )
-            text += "\n<b>Haftalar bo'yicha:</b>"
-            for w in weekly_data:
-                bar = "█" * min(w["orders"], 10) if w["orders"] > 0 else "░"
-                text += f"\n{w['week']}: {bar} {w['orders']} ta | {w['revenue']:,.0f} so'm"
-        else:
-            text = (
-                f"📅 <b>Месячный отчёт</b> (последние 30 дней)\n\n"
-                f"📦 Всего заказов: <b>{stats['total']}</b>\n"
-                f"✅ Доставлено: <b>{stats['delivered']}</b>\n"
-                f"❌ Отменено: <b>{stats['cancelled']}</b>\n"
-                f"💰 Выручка: <b>{stats['revenue']:,.0f} сум</b>\n"
-            )
-            if total_expenses > 0:
+            else:
                 text += (
                     f"📉 Расходы: <b>{total_expenses:,.0f} сум</b>\n"
                     f"💵 Прибыль: <b>{profit:,.0f} сум</b>\n"
                     f"📊 Рентабельность: <b>{profitability:.1f}%</b>\n"
                 )
-            text += "\n<b>По неделям:</b>"
+
+        text += "\n" + t("report_monthly_weeks_header", lang)
+        if lang == "uz":
+            for w in weekly_data:
+                bar = "█" * min(w["orders"], 10) if w["orders"] > 0 else "░"
+                text += f"\n{w['week']}: {bar} {w['orders']} ta | {w['revenue']:,.0f} so'm"
+        else:
             for w in weekly_data:
                 bar = "█" * min(w["orders"], 10) if w["orders"] > 0 else "░"
                 text += f"\n{w['week']}: {bar} {w['orders']} шт. | {w['revenue']:,.0f} сум"
