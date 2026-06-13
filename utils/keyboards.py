@@ -35,20 +35,20 @@ def main_menu_keyboard(lang: str = "ru") -> ReplyKeyboardMarkup:
     return builder.as_markup(resize_keyboard=True)
 
 
-def back_keyboard(lang: str = "ru") -> ReplyKeyboardMarkup:
-    """Faqat 'Orqaga' tugmasi."""
-    builder = ReplyKeyboardBuilder()
-    builder.button(text=t("btn_back", lang))
-    return builder.as_markup(resize_keyboard=True)
+def back_keyboard(lang: str = "ru") -> InlineKeyboardMarkup:
+    """Faqat 'Orqaga' inline tugmasi — edit_text bilan ishlaydi."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text=t("btn_back", lang), callback_data="go_back")
+    return builder.as_markup()
 
 
-def back_refresh_keyboard(lang: str = "ru") -> ReplyKeyboardMarkup:
-    """Orqaga + Yangilash tugmalari."""
-    builder = ReplyKeyboardBuilder()
-    builder.button(text=t("btn_refresh", lang))
-    builder.button(text=t("btn_back", lang))
+def back_refresh_keyboard(lang: str = "ru") -> InlineKeyboardMarkup:
+    """Orqaga + Yangilash inline tugmalari — edit_text bilan ishlaydi."""
+    builder = InlineKeyboardBuilder()
+    builder.button(text=t("btn_refresh", lang), callback_data="go_refresh")
+    builder.button(text=t("btn_back", lang), callback_data="go_back")
     builder.adjust(2)
-    return builder.as_markup(resize_keyboard=True)
+    return builder.as_markup()
 
 
 def settings_keyboard(lang: str = "ru") -> InlineKeyboardMarkup:

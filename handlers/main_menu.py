@@ -1,5 +1,8 @@
 """
 handlers/main_menu.py — Asosiy menyu: mahsulotlar, buyurtmalar, ombor, hisobot, sozlamalar.
+
+MUHIM: aiogram da edit_text() faqat InlineKeyboardMarkup qabul qiladi.
+ReplyKeyboardMarkup uchun har doim message.answer() ishlatish kerak.
 """
 import logging
 from aiogram import Router, F
@@ -37,7 +40,7 @@ class CompetitorStates(StatesGroup):
     waiting_product_name = State()
 
 
-# ─── Helper ───────────────────────────────────────────────────────────────────
+# ─── Helpers ──────────────────────────────────────────────────────────────────
 
 async def _get_user_or_warn(message: Message) -> dict | None:
     user = await get_user(message.from_user.id)
@@ -47,25 +50,36 @@ async def _get_user_or_warn(message: Message) -> dict | None:
     return user
 
 
-def _api_error_text(lang: str, status: str = "") -> str:
-    """API ruxsat xatosi uchun to'g'ri matn."""
-    if lang == "uz":
-        return (
-            f"❌ <b>Yuklashda xato</b>\n\n"
-            f"API so'rovda muammo yuz berdi{(' (' + status + ')') if status else ''}.\n\n"
-            f"<b>Nima qilish kerak:</b>\n"
-            f"• seller.uzum.uz → Sozlamalar → API kalitlar\n"
-            f"• Kalitning barcha huquqlari yoqilganligini tekshiring\n"
-            f"• Yangi kalit yaratib /start orqali qayta kiriting"
-        )
-    return (
+async def _send_result(message: Message, loading_msg, text: str, lang: str, is_error: bool = False):
+    """
+    Natijani to'g'ri yuborish:
+    - loading_msg ni matn + InlineKeyboard bilan edit qilish
+    """
+    kb = back_keyboard(lang) if is_error else back_refresh_keyboard(lang)
+    try:
+        await loading_msg.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await message.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+async def _send_error(message: Message, loading_msg, lang: str, error_detail: str = ""):
+    text = (
+        f"❌ <b>Yuklashda xato</b>\n\n"
+        f"<code>{error_detail[:200]}</code>\n\n"
+        f"<b>Nima qilish kerak:</b>\n"
+        f"• seller.uzum.uz → Sozlamalar → API kalitlar\n"
+        f"• Kalitning barcha huquqlari yoqilganligini tekshiring"
+        if lang == "uz" else
         f"❌ <b>Ошибка загрузки</b>\n\n"
-        f"Проблема при запросе к API{(' (' + status + ')') if status else ''}.\n\n"
+        f"<code>{error_detail[:200]}</code>\n\n"
         f"<b>Что делать:</b>\n"
         f"• seller.uzum.uz → Настройки → API ключи\n"
-        f"• Убедитесь что у ключа включены все права\n"
-        f"• Создайте новый ключ и введите через /start"
+        f"• Убедитесь что у ключа включены все права"
     )
+    try:
+        await loading_msg.edit_text(text, reply_markup=back_keyboard(lang), parse_mode="HTML")
+    except Exception:
+        await message.answer(text, reply_markup=back_keyboard(lang), parse_mode="HTML")
 
 
 # ─── Mahsulotlar ─────────────────────────────────────────────────────────────
@@ -77,18 +91,15 @@ async def cmd_products(message: Message, state: FSMContext):
         return
     lang = user.get("lang", "ru")
     msg = await message.answer(t("loading", lang), parse_mode="HTML")
-    await _send_products_page(msg, user, lang, page=1, edit=True)
+    await _send_products_page(message, msg, user, lang, page=1)
 
 
-async def _send_products_page(msg, user: dict, lang: str, page: int = 1, edit: bool = False):
+async def _send_products_page(message: Message, msg, user: dict, lang: str, page: int = 1):
     try:
         products = await get_products(user["api_key"], user["shop_id"])
         if not products:
-            text = t("no_data", lang)
-            if edit:
-                await msg.edit_text(text, parse_mode="HTML")
-            else:
-                await msg.answer(text, parse_mode="HTML")
+            await msg.edit_text(t("no_data", lang), parse_mode="HTML")
+            await message.answer("🔙", reply_markup=back_keyboard(lang))
             return
 
         total = len(products)
@@ -118,26 +129,12 @@ async def _send_products_page(msg, user: dict, lang: str, page: int = 1, edit: b
 
         text = "\n\n".join(lines)
         kb = products_nav_keyboard(page, total_pages, lang)
+        # products_nav_keyboard — InlineKeyboard, edit_text bilan ishlaydi
+        await msg.edit_text(text, reply_markup=kb, parse_mode="HTML")
 
-        if edit:
-            await msg.edit_text(text, reply_markup=kb, parse_mode="HTML")
-        else:
-            await msg.answer(text, reply_markup=kb, parse_mode="HTML")
-
-    except UzumAuthError as e:
-        logger.error(f"Products auth error: {e}")
-        err = _api_error_text(lang, "401/403")
-        if edit:
-            await msg.edit_text(err, reply_markup=back_keyboard(lang), parse_mode="HTML")
-        else:
-            await msg.answer(err, reply_markup=back_keyboard(lang), parse_mode="HTML")
-    except UzumAPIError as e:
-        logger.error(f"Products API error: {e}")
-        err = _api_error_text(lang, str(e)[:80])
-        if edit:
-            await msg.edit_text(err, reply_markup=back_keyboard(lang), parse_mode="HTML")
-        else:
-            await msg.answer(err, reply_markup=back_keyboard(lang), parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Products error: {type(e).__name__}: {e}")
+        await _send_error(message, msg, lang, f"{type(e).__name__}: {str(e)}")
 
 
 @router.callback_query(F.data.startswith("products_page_"))
@@ -148,7 +145,37 @@ async def products_pagination(callback: CallbackQuery):
         await callback.answer()
         return
     lang = user.get("lang", "ru")
-    await _send_products_page(callback.message, user, lang, page=page, edit=True)
+    # Paginatsiyada faqat edit
+    try:
+        products = await get_products(user["api_key"], user["shop_id"])
+        pages = chunk_list(products, PRODUCTS_PER_PAGE)
+        total_pages = len(pages)
+        page = max(1, min(page, total_pages))
+        page_products = pages[page - 1]
+        lines = [t("products_title", lang, count=len(products))]
+        for p in page_products:
+            name = short_name(p.get("title") or p.get("name") or "—")
+            skus = p.get("skuList", [])
+            if skus:
+                sku = skus[0]
+                qty = safe_int(sku.get("quantityActive"))
+                price = safe_float(sku.get("price") or sku.get("purchasePrice"))
+                avg = safe_float(sku.get("avgdsales"))
+                days = safe_int(sku.get("forecastOutOfStock", 999))
+                icon = stock_icon(qty)
+                lines.append(t("product_item", lang,
+                    icon=icon, name=name, qty=qty,
+                    price=price, avg=avg,
+                    days=days if days < 9999 else "∞"
+                ))
+            else:
+                lines.append(f"• {name}")
+        text = "\n\n".join(lines)
+        kb = products_nav_keyboard(page, total_pages, lang)
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception as e:
+        logger.error(f"Pagination error: {e}")
+        await callback.answer(str(e)[:100], show_alert=True)
     await callback.answer()
 
 
@@ -194,16 +221,17 @@ async def cmd_orders(message: Message):
                 order_id = o.get("id", "—")
                 price = safe_float(o.get("finalPrice") or o.get("price"))
                 text += f"\n{icon} #{order_id} — {format_price(price, lang)}"
+        else:
+            if lang == "uz":
+                text += "\n\n📭 So'nggi 24 soatda buyurtma yo'q."
+            else:
+                text += "\n\n📭 За последние 24 часа заказов нет."
 
-        await msg.edit_text(text, reply_markup=back_refresh_keyboard(lang), parse_mode="HTML")
+        await _send_result(message, msg, text, lang)
 
     except Exception as e:
         logger.error(f"Orders error: {type(e).__name__}: {e}")
-        await msg.edit_text(
-            _api_error_text(lang, f"{type(e).__name__}: {str(e)[:60]}"),
-            reply_markup=back_keyboard(lang),
-            parse_mode="HTML"
-        )
+        await _send_error(message, msg, lang, f"{type(e).__name__}: {str(e)}")
 
 
 # ─── Omborxona ────────────────────────────────────────────────────────────────
@@ -220,15 +248,11 @@ async def cmd_storage(message: Message):
         invoices = await get_invoices(user["api_key"], user["shop_id"])
         storage_items = parse_invoices(invoices)
         report = format_storage_report(storage_items, lang)
-        await msg.edit_text(report, reply_markup=back_refresh_keyboard(lang), parse_mode="HTML")
+        await _send_result(message, msg, report, lang)
 
     except Exception as e:
         logger.error(f"Storage error: {type(e).__name__}: {e}")
-        await msg.edit_text(
-            _api_error_text(lang, f"{type(e).__name__}: {str(e)[:60]}"),
-            reply_markup=back_keyboard(lang),
-            parse_mode="HTML"
-        )
+        await _send_error(message, msg, lang, f"{type(e).__name__}: {str(e)}")
 
 
 # ─── Bugungi hisobot ──────────────────────────────────────────────────────────
@@ -244,7 +268,6 @@ async def cmd_report_today(message: Message):
     try:
         orders = await get_fbs_orders(user["api_key"], date_from=_days_ago_ms(1))
         stats = summarize_orders(orders)
-
         products = await get_products(user["api_key"], user["shop_id"])
         invoices = await get_invoices(user["api_key"], user["shop_id"])
         storage_items = parse_invoices(invoices)
@@ -301,15 +324,11 @@ async def cmd_report_today(message: Message):
             text += "\n\n" + t("out_of_stock_header", lang) + "\n"
             text += "\n".join(f"  🚫 {n}" for n in out_of_stock[:10])
 
-        await msg.edit_text(text, reply_markup=back_refresh_keyboard(lang), parse_mode="HTML")
+        await _send_result(message, msg, text, lang)
 
     except Exception as e:
         logger.error(f"Report error: {type(e).__name__}: {e}")
-        await msg.edit_text(
-            _api_error_text(lang, f"{type(e).__name__}: {str(e)[:60]}"),
-            reply_markup=back_keyboard(lang),
-            parse_mode="HTML"
-        )
+        await _send_error(message, msg, lang, f"{type(e).__name__}: {str(e)}")
 
 
 # ─── Sozlamalar ───────────────────────────────────────────────────────────────
@@ -328,10 +347,8 @@ async def cmd_settings(message: Message):
 
     text = t("settings_title", lang) + "\n\n" + t(
         "settings_info", lang,
-        username=username,
-        shop_name=shop_name,
-        shop_id=shop_id,
-        key_status=key_status,
+        username=username, shop_name=shop_name,
+        shop_id=shop_id, key_status=key_status,
     )
     await message.answer(text, reply_markup=settings_keyboard(lang), parse_mode="HTML")
 
@@ -394,8 +411,9 @@ async def competitor_search_process(message: Message, state: FSMContext):
 
     except Exception as e:
         logger.error(f"Competitor search error: {e}")
-        await msg.edit_text(t("error_api", lang, error=str(e)[:100]), parse_mode="HTML")
+        await msg.edit_text(f"❌ <code>{str(e)[:150]}</code>", parse_mode="HTML")
 
+    await message.answer("🔙", reply_markup=back_keyboard(lang))
     await state.clear()
 
 
@@ -434,6 +452,21 @@ async def competitor_back(callback: CallbackQuery, state: FSMContext):
     await callback.answer()
 
 
+# ─── Ombor — back button (InlineKeyboard orqali kelsa) ───────────────────────
+
+@router.callback_query(F.data == "storage_back")
+async def storage_back(callback: CallbackQuery):
+    user = await get_user(callback.from_user.id)
+    lang = user.get("lang", "ru") if user else "ru"
+    shop_name = user.get("shop_name", "—") if user else "—"
+    await callback.message.answer(
+        t("main_menu", lang, shop_name=shop_name),
+        reply_markup=main_menu_keyboard(lang),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
 # ─── Orqaga / Yangilash ───────────────────────────────────────────────────────
 
 @router.message(F.text.in_(["🔙 Orqaga", "🔙 Назад"]))
@@ -453,4 +486,38 @@ async def cmd_back(message: Message, state: FSMContext):
 async def cmd_refresh(message: Message):
     user = await get_user(message.from_user.id)
     lang = user.get("lang", "ru") if user else "ru"
-    await message.answer(t("loading", lang), parse_mode="HTML")
+    shop_name = user.get("shop_name", "—") if user else "—"
+    await message.answer(
+        t("main_menu", lang, shop_name=shop_name),
+        reply_markup=main_menu_keyboard(lang),
+        parse_mode="HTML"
+    )
+
+
+# ─── Global Inline callback: orqaga va yangilash ─────────────────────────────
+
+@router.callback_query(F.data == "go_back")
+async def cb_go_back(callback: CallbackQuery, state: FSMContext):
+    await state.clear()
+    user = await get_user(callback.from_user.id)
+    lang = user.get("lang", "ru") if user else "ru"
+    shop_name = user.get("shop_name", "—") if user else "—"
+    await callback.message.answer(
+        t("main_menu", lang, shop_name=shop_name),
+        reply_markup=main_menu_keyboard(lang),
+        parse_mode="HTML"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "go_refresh")
+async def cb_go_refresh(callback: CallbackQuery):
+    user = await get_user(callback.from_user.id)
+    lang = user.get("lang", "ru") if user else "ru"
+    shop_name = user.get("shop_name", "—") if user else "—"
+    await callback.message.answer(
+        t("main_menu", lang, shop_name=shop_name),
+        reply_markup=main_menu_keyboard(lang),
+        parse_mode="HTML"
+    )
+    await callback.answer()
