@@ -21,6 +21,9 @@ from services.competitor_monitor import (
     format_single_product_report,
 )
 from locales.i18n import t
+from handlers.report_fallback import (
+    build_product_fallback_report, product_stats_available
+)
 from utils.keyboards import (
     main_menu_keyboard, settings_keyboard,
     back_keyboard, products_nav_keyboard, competitor_keyboard
@@ -371,6 +374,28 @@ async def cmd_report_today(message: Message):
                 out_of_stock.append(name)
             elif qty <= 5:
                 low_stock.append(f"{name} ({qty})")
+
+        # Buyurtma/moliya endpointlari 403 (orders bo'sh) — mahsulot asosidagi
+        # taxminiy hisobotga o'tish. Mahsulot stat mavjud bo'lsa: kunlik sarlavha +
+        # taxminiy xulosa + mavjud kam/tugagan ro'yxatlar; zeroed orders bloki va
+        # moliya overlay'i tashlab ketiladi (moliya ham 403).
+        if stats["total"] == 0:
+            product_stats = await get_sales_stats_from_products(
+                user["api_key"], user["shop_id"]
+            )
+            if product_stats_available(product_stats):
+                text = (
+                    t("report_today", lang) + "\n\n"
+                    + build_product_fallback_report(product_stats, lang)
+                )
+                if low_stock:
+                    text += "\n\n" + t("low_stock_header", lang) + "\n"
+                    text += "\n".join(f"  ⚠️ {n}" for n in low_stock[:10])
+                if out_of_stock:
+                    text += "\n\n" + t("out_of_stock_header", lang) + "\n"
+                    text += "\n".join(f"  🚫 {n}" for n in out_of_stock[:10])
+                await msg.edit_text(text, parse_mode="HTML")
+                return
 
         if lang == "uz":
             text = (

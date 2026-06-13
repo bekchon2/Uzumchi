@@ -149,6 +149,36 @@ TEXTS = {
         "ru": "🚫 <b>Закончившиеся товары:</b>",
     },
 
+    # ── Report 403 product-based fallback (shared: daily / weekly / monthly) ──
+    "report_fallback_summary": {
+        "uz": (
+            "📊 <b>Mahsulot asosidagi taxminiy hisobot</b>\n"
+            "📦 Jami sotilgan: <b>{total_sold}</b> dona\n"
+            "↩️ Qaytarilgan: <b>{total_returned}</b> dona\n"
+            "💰 Taxminiy tushum: <b>{total_revenue:,.0f} so'm</b>\n"
+            "🗂 Tovar turlari: <b>{products_count}</b> ta\n"
+            "⚠️ Kam qolgan: <b>{low_stock_count}</b> | 🚫 Tugagan: <b>{out_count}</b>"
+        ),
+        "ru": (
+            "📊 <b>Приблизительный отчёт по товарам</b>\n"
+            "📦 Всего продано: <b>{total_sold}</b> шт.\n"
+            "↩️ Возвращено: <b>{total_returned}</b> шт.\n"
+            "💰 Ориентировочная выручка: <b>{total_revenue:,.0f} сум</b>\n"
+            "🗂 Видов товаров: <b>{products_count}</b> шт.\n"
+            "⚠️ Мало: <b>{low_stock_count}</b> | 🚫 Закончились: <b>{out_count}</b>"
+        ),
+    },
+    "report_fallback_note": {
+        "uz": (
+            "⚠️ <i>Buyurtma/moliya ma'lumotlari uchun API kalitga ruxsat berilmagan — "
+            "ko'rsatilgan raqamlar tovar ma'lumotlaridan olingan taxminiy qiymatlar.</i>"
+        ),
+        "ru": (
+            "⚠️ <i>Доступ к данным заказов/финансов для API-ключа не предоставлен — "
+            "показанные цифры приблизительные, рассчитаны из данных о товарах.</i>"
+        ),
+    },
+
     # ── Returns ──────────────────────────────────────────────────────────────
     "returns_title": {
         "uz": "↩️ <b>Qaytarmalar</b> (so'nggi 30 kun):",

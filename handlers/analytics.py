@@ -14,6 +14,7 @@ from services.uzum_api import (
     get_fbs_orders_period, get_returns, get_expenses,
     get_products, get_invoices, summarize_orders,
     get_finance_orders, summarize_finance_orders,
+    get_sales_stats_from_products,
     _days_ago_ms, _now_ms
 )
 from services.storage_tracker import parse_invoices, get_storage_alerts
@@ -21,6 +22,9 @@ from services.gemini_ai import (
     ask_gemini, build_sales_analysis_prompt, build_storage_advice_prompt
 )
 from locales.i18n import t
+from handlers.report_fallback import (
+    build_product_fallback_report, product_stats_available
+)
 from utils.keyboards import (
     main_menu_keyboard, back_keyboard, ai_keyboard, cancel_keyboard
 )
@@ -95,6 +99,22 @@ async def cmd_weekly(message: Message):
     try:
         orders = await get_fbs_orders_period(user["api_key"], days=7)
         stats = summarize_orders(orders)
+
+        # Buyurtma/moliya 403 (orders bo'sh) — mahsulot asosidagi taxminiy hisobotga
+        # o'tish: haftalik sarlavha + taxminiy xulosa, zeroed body / kunlik grafik /
+        # moliya overlay'i o'rniga.
+        if stats["total"] == 0:
+            product_stats = await get_sales_stats_from_products(
+                user["api_key"], user["shop_id"]
+            )
+            if product_stats_available(product_stats):
+                text = (
+                    t("report_weekly", lang) + "\n\n"
+                    + build_product_fallback_report(product_stats, lang)
+                )
+                await msg.edit_text(text, parse_mode="HTML")
+                return
+
         daily_data = _build_daily_data(orders, days=7)
 
         # Finance overlay (conditional) — 7 kunlik oyna bo'yicha agregatlar
@@ -159,6 +179,22 @@ async def cmd_monthly(message: Message):
     try:
         orders = await get_fbs_orders_period(user["api_key"], days=30)
         stats = summarize_orders(orders)
+
+        # Buyurtma/moliya 403 (orders bo'sh) — mahsulot asosidagi taxminiy hisobotga
+        # o'tish: oylik sarlavha + taxminiy xulosa, zeroed body / haftalik grafik /
+        # xarajatlar-foyda bloki / moliya overlay'i o'rniga. (get_expenses faqat
+        # orders mavjud yo'lda chaqiriladi.)
+        if stats["total"] == 0:
+            product_stats = await get_sales_stats_from_products(
+                user["api_key"], user["shop_id"]
+            )
+            if product_stats_available(product_stats):
+                text = (
+                    t("report_monthly", lang) + "\n\n"
+                    + build_product_fallback_report(product_stats, lang)
+                )
+                await msg.edit_text(text, parse_mode="HTML")
+                return
 
         weekly_data = []
         for week_num in range(4):
