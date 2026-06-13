@@ -112,17 +112,15 @@ def cancel_keyboard(lang: str = "ru") -> ReplyKeyboardMarkup:
 
 
 def products_nav_keyboard(page: int, total_pages: int, lang: str = "ru") -> InlineKeyboardMarkup:
-    """Mahsulotlar paginatsiyasi."""
+    """Mahsulotlar paginatsiyasi — faqat sahifa o'tish."""
     builder = InlineKeyboardBuilder()
+    row = []
     if page > 1:
         builder.button(text="⬅️", callback_data=f"products_page_{page - 1}")
     builder.button(text=f"{page}/{total_pages}", callback_data="products_noop")
     if page < total_pages:
         builder.button(text="➡️", callback_data=f"products_page_{page + 1}")
-    builder.button(
-        text="🔍 " + ("Raqib narxlar" if lang == "uz" else "Цены конкурентов"),
-        callback_data="products_competitor"
-    )
-    builder.button(text=t("btn_back", lang), callback_data="products_back")
-    builder.adjust(3, 1, 1)
+    # Nav tugmalar soni
+    nav_count = (1 if page > 1 else 0) + 1 + (1 if page < total_pages else 0)
+    builder.adjust(nav_count)
     return builder.as_markup()
