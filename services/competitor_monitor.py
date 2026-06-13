@@ -38,26 +38,48 @@ def extract_product_id_from_url(url: str) -> str | None:
     https://uzum.uz/ru/product/tovar-nomi-2855035?skuId=...  → "2855035"
     """
     url = url.strip()
-    # /product/slug-12345 formatidan
     match = re.search(r'/product/[^/?#]+-(\d{4,})', url)
     if match:
         return match.group(1)
-    # /product/12345
     match = re.search(r'/product/(\d{4,})', url)
     if match:
         return match.group(1)
-    # URL da xohlagan 6+ raqam
     match = re.search(r'(\d{6,})', url)
     if match:
         return match.group(1)
     return None
 
 
+def _extract_prices(payload: dict) -> list[float]:
+    """Payload dan barcha narxlarni olish."""
+    prices = []
+    for sku in (payload.get("skuList") or payload.get("skus") or []):
+        for key in ["purchasePrice", "sellPrice", "price", "minSellPrice",
+                    "salePrice", "currentPrice", "fullPrice", "cost"]:
+            val = sku.get(key)
+            if val:
+                try:
+                    v = float(val)
+                    if v > 100:
+                        prices.append(v)
+                        break
+                except Exception:
+                    pass
+    for key in ["minSellPrice", "price", "sellPrice", "currentPrice",
+                "minPrice", "maxPrice", "salePrice"]:
+        val = payload.get(key)
+        if val:
+            try:
+                v = float(val)
+                if v > 100:
+                    prices.append(v)
+            except Exception:
+                pass
+    return list(set(prices))
+
+
 async def get_product_title_from_html(url: str) -> str | None:
-    """
-    Uzum tovar sahifasining HTML dan tovar nomini olish.
-    <title> yoki og:title yoki h1 tagidan.
-    """
+    """Uzum tovar sahifasi HTML dan tovar nomini olish."""
     try:
         async with aiohttp.ClientSession(
             connector=aiohttp.TCPConnector(ssl=SSL_CONTEXT),
@@ -65,12 +87,15 @@ async def get_product_title_from_html(url: str) -> str | None:
         ) as session:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                 if resp.status != 200:
-                    logger.warning(f"HTML fetch {url} → {resp.status}")
+                    logger.warning(f"[COMP] HTML {url} → {resp.status}")
                     return None
                 html = await resp.text()
 
-                # 1. og:title meta tag (eng ishonchli)
-                match = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']', html, re.IGNORECASE)
+                # 1. og:title meta tag
+                match = re.search(
+                    r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
+                    html, re.IGNORECASE
+                )
                 if match:
                     title = match.group(1).strip()
                     logger.info(f"[COMP] og:title: {title[:50]}")
@@ -80,66 +105,19 @@ async def get_product_title_from_html(url: str) -> str | None:
                 match = re.search(r'<title>([^<]+)</title>', html, re.IGNORECASE)
                 if match:
                     title = match.group(1).strip()
-                    # " | Uzum" yoki " - Uzum" ni olib tashlash
                     title = re.sub(r'\s*[|–-]\s*Uzum.*$', '', title, flags=re.IGNORECASE).strip()
                     if title and len(title) > 5:
                         logger.info(f"[COMP] title tag: {title[:50]}")
                         return title
 
-                # 3. JSON-LD strukturali ma'lumotlar
+                # 3. JSON-LD name
                 match = re.search(r'"name"\s*:\s*"([^"]{5,})"', html)
                 if match:
                     title = match.group(1).strip()
                     logger.info(f"[COMP] JSON-LD name: {title[:50]}")
                     return title
-
     except Exception as e:
         logger.warning(f"[COMP] HTML fetch error: {e}")
-    return None
-
-
-async def get_product_info_by_url(uzum_url: str) -> dict | None:
-    """
-    Uzum tovar URL dan to'liq ma'lumot olish:
-    1. HTML sahifadan tovar nomini olish
-    2. API dan narx va statistikani olish
-    """
-    product_id = extract_product_id_from_url(uzum_url)
-    if not product_id:
-        logger.warning(f"[COMP] URL dan ID ajratilmadi: {uzum_url}")
-        return None
-
-    logger.info(f"[COMP] Product ID: {product_id}, URL: {uzum_url}")
-
-    # Parallel ravishda HTML va API dan olish
-    html_task = asyncio.create_task(get_product_title_from_html(uzum_url))
-    api_task = asyncio.create_task(_get_product_from_api(product_id))
-
-    title_from_html = await html_task
-    api_data = await api_task
-
-    if api_data:
-        # API ma'lumoti bor — HTML nomini birlashtirish
-        if title_from_html and not api_data.get("title") or api_data.get("title") == "—":
-            api_data["title"] = title_from_html
-        return api_data
-
-    # API ishlamadi — HTML dan nom, narx yo'q
-    if title_from_html:
-        logger.info(f"[COMP] Faqat HTML nom topildi: {title_from_html[:40]}")
-        return {
-            "title": title_from_html[:60],
-            "price": 0,
-            "min_price": 0,
-            "max_price": 0,
-            "shop": "—",
-            "rating": 0,
-            "reviews": 0,
-            "product_id": product_id,
-            "url": uzum_url,
-            "html_only": True,  # Faqat HTML dan olindi
-        }
-
     return None
 
 
@@ -150,7 +128,6 @@ async def _get_product_from_api(product_id: str) -> dict | None:
         f"https://api.uzum.uz/api/v2/product/{product_id}",
         f"https://api.uzum.uz/api/product/{product_id}?lang=ru",
     ]
-
     async with aiohttp.ClientSession(
         connector=aiohttp.TCPConnector(ssl=SSL_CONTEXT),
         headers=API_HEADERS
@@ -162,36 +139,27 @@ async def _get_product_from_api(product_id: str) -> dict | None:
                     logger.info(f"[COMP] {api_url} → {resp.status}")
                     if resp.status != 200:
                         continue
-
                     try:
                         data = await resp.json()
                     except Exception:
                         data = await resp.json(content_type=None)
 
-                    # payload null bo'lsa — tovar yashirilgan
                     raw_payload = data.get("payload")
                     if raw_payload is None:
-                        logger.warning(f"[COMP] payload=null: tovar yashirilgan yoki mavjud emas")
+                        logger.warning("[COMP] payload=null: tovar yashirilgan")
                         continue
-
                     payload = raw_payload if isinstance(raw_payload, dict) else data
                     if not isinstance(payload, dict) or not payload:
                         continue
 
-                    logger.info(f"[COMP] payload keys: {list(payload.keys())[:10]}")
-
                     prices = _extract_prices(payload)
                     if not prices:
-                        logger.warning(f"[COMP] Narx topilmadi, payload keys: {list(payload.keys())}")
+                        logger.warning(f"[COMP] Narx topilmadi: {list(payload.keys())[:10]}")
                         continue
 
-                    min_p = min(prices)
-                    max_p = max(prices)
-
-                    title = (
-                        payload.get("title") or payload.get("name")
-                        or payload.get("productName") or "—"
-                    )
+                    min_p, max_p = min(prices), max(prices)
+                    title = (payload.get("title") or payload.get("name")
+                             or payload.get("productName") or "—")
                     shop = payload.get("shop") or payload.get("seller") or {}
                     shop_name = (
                         shop.get("name") or shop.get("shopName")
@@ -211,228 +179,45 @@ async def _get_product_from_api(product_id: str) -> dict | None:
                         "product_id": product_id,
                         "url": "",
                     }
-
             except asyncio.TimeoutError:
                 logger.warning(f"[COMP] Timeout: {api_url}")
             except Exception as e:
                 logger.warning(f"[COMP] {api_url}: {e}")
-
     return None
-
-
-def _extract_prices(payload: dict) -> list[float]:
-    """Payload dan barcha narxlarni olish."""
-    prices = []
-
-    # skuList
-    for sku in (payload.get("skuList") or payload.get("skus") or []):
-        for key in ["purchasePrice", "sellPrice", "price", "minSellPrice",
-                    "salePrice", "currentPrice", "fullPrice", "cost"]:
-            val = sku.get(key)
-            if val:
-                try:
-                    v = float(val)
-                    if v > 100:
-                        prices.append(v)
-                        break
-                except Exception:
-                    pass
-
-    # To'g'ridan
-    for key in ["minSellPrice", "price", "sellPrice", "currentPrice",
-                "minPrice", "maxPrice", "salePrice"]:
-        val = payload.get(key)
-        if val:
-            try:
-                v = float(val)
-                if v > 100:
-                    prices.append(v)
-            except Exception:
-                pass
-
-    return list(set(prices))
-
-
-def extract_product_id_from_url(url: str) -> str | None:
-    url = url.strip()
-    match = re.search(r'/product/[^/?#]+-(\d+)', url)
-    if match:
-        return match.group(1)
-    match = re.search(r'/product/(\d+)', url)
-    if match:
-        return match.group(1)
-    match = re.search(r'[^\d](\d{5,})', url)
-    if match:
-        return match.group(1)
-    return None
-
-
-def _extract_prices_from_product(product: dict) -> list[float]:
-    """
-    Uzum product JSON dan barcha narxlarni olish.
-    Log da to'liq payload strukturasi ko'rinadi.
-    """
-    prices = []
-
-    # Log — birinchi marta to'liq ko'rish uchun
-    logger.info(f"[COMP_PARSE] product keys: {list(product.keys())}")
-
-    # 1. skuList — asosiy
-    sku_list = (
-        product.get("skuList")
-        or product.get("skus")
-        or product.get("offers")
-        or []
-    )
-    if sku_list:
-        logger.info(f"[COMP_PARSE] skuList[0] keys: {list(sku_list[0].keys()) if sku_list else []}")
-        for sku in sku_list:
-            for key in ["purchasePrice", "sellPrice", "price", "minSellPrice",
-                        "salePrice", "currentPrice", "fullPrice", "cost"]:
-                val = sku.get(key)
-                if val:
-                    try:
-                        v = float(val)
-                        if v > 100:  # so'mda bo'ladi
-                            prices.append(v)
-                            break
-                    except Exception:
-                        pass
-
-    # 2. To'g'ridan product ichida
-    for key in ["minSellPrice", "price", "sellPrice", "currentPrice",
-                "minPrice", "maxPrice", "salePrice", "minFullPrice", "maxSalePrice"]:
-        val = product.get(key)
-        if val:
-            try:
-                v = float(val)
-                if v > 100:
-                    prices.append(v)
-            except Exception:
-                pass
-
-    # 3. Characteristicsdan emas — balki boshqa nested field
-    for key in product:
-        val = product[key]
-        if isinstance(val, dict):
-            for sub_key in ["price", "sellPrice", "minPrice", "cost"]:
-                sub_val = val.get(sub_key)
-                if sub_val:
-                    try:
-                        v = float(sub_val)
-                        if v > 100:
-                            prices.append(v)
-                    except Exception:
-                        pass
-
-    # Takrorlanganlarni olib tashlash
-    prices = list(set(prices))
-    logger.info(f"[COMP_PARSE] Topilgan narxlar: {prices}")
-    return prices
 
 
 async def get_product_info_by_url(uzum_url: str) -> dict | None:
+    """
+    Uzum tovar URL dan ma'lumot olish:
+    1. HTML sahifadan nom
+    2. API dan narx
+    """
     product_id = extract_product_id_from_url(uzum_url)
     if not product_id:
-        logger.warning(f"URL dan ID ajratilmadi: {uzum_url}")
+        logger.warning(f"[COMP] URL dan ID ajratilmadi: {uzum_url}")
         return None
 
-    logger.info(f"[COMPETITOR] Product ID: {product_id}")
+    logger.info(f"[COMP] Product ID: {product_id}")
 
-    async with aiohttp.ClientSession(
-        connector=aiohttp.TCPConnector(ssl=SSL_CONTEXT),
-        headers=HEADERS
-    ) as session:
-        # Ishlagan endpoint: /api/product/{id}
-        api_url = f"https://api.uzum.uz/api/product/{product_id}"
-        try:
-            await asyncio.sleep(0.8)
-            async with session.get(
-                api_url,
-                timeout=aiohttp.ClientTimeout(total=15)
-            ) as resp:
-                logger.info(f"[COMPETITOR] {api_url} → {resp.status}")
-                if resp.status != 200:
-                    # 400 bo'lsa lang parametr bilan urinib ko'r
-                    async with session.get(
-                        f"{api_url}?lang=ru",
-                        timeout=aiohttp.ClientTimeout(total=15)
-                    ) as resp2:
-                        logger.info(f"[COMPETITOR] {api_url}?lang=ru → {resp2.status}")
-                        if resp2.status != 200:
-                            return None
-                        resp = resp2
+    title_from_html = await get_product_title_from_html(uzum_url)
+    api_data = await _get_product_from_api(product_id)
 
-                try:
-                    data = await resp.json()
-                except Exception:
-                    data = await resp.json(content_type=None)
+    if api_data:
+        if title_from_html and (not api_data.get("title") or api_data.get("title") == "—"):
+            api_data["title"] = title_from_html
+        api_data["url"] = uzum_url
+        return api_data
 
-                logger.info(f"[COMPETITOR] Top-level keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
-
-                # payload ni olish
-                payload = data.get("payload") or data
-                if not isinstance(payload, dict):
-                    logger.warning(f"[COMPETITOR] payload dict emas: {type(payload)}")
-                    return None
-
-                # To'liq payload log (birinchi marta)
-                logger.info(f"[COMPETITOR] payload keys: {list(payload.keys())}")
-
-                # Narxlarni olish
-                prices = _extract_prices_from_product(payload)
-
-                if not prices:
-                    # Fallback: barcha nested dict larni tekshirish
-                    logger.warning(f"[COMPETITOR] Narx topilmadi, payload to'liq: {json.dumps(payload, ensure_ascii=False)[:1000]}")
-                    return None
-
-                min_price = min(prices)
-                max_price = max(prices)
-
-                # Tovar nomi
-                title = (
-                    payload.get("title") or payload.get("name")
-                    or payload.get("productName") or "—"
-                )
-
-                # Do'kon
-                shop = payload.get("shop") or payload.get("seller") or payload.get("store") or {}
-                if isinstance(shop, dict):
-                    shop_name = (
-                        shop.get("name") or shop.get("shopName")
-                        or shop.get("title") or "—"
-                    )
-                else:
-                    shop_name = str(shop) or "—"
-
-                # Reyting
-                rating = float(
-                    payload.get("rating") or payload.get("avgRating")
-                    or payload.get("reviewRating") or 0
-                )
-                reviews = int(
-                    payload.get("reviewCount") or payload.get("totalReviews")
-                    or payload.get("reviewsCount") or 0
-                )
-
-                logger.info(f"[COMPETITOR] OK: '{title[:30]}', min={min_price}, shop={shop_name}")
-                return {
-                    "title": str(title)[:60],
-                    "price": (min_price + max_price) / 2,
-                    "min_price": min_price,
-                    "max_price": max_price,
-                    "shop": shop_name,
-                    "rating": rating,
-                    "reviews": reviews,
-                    "product_id": product_id,
-                    "url": uzum_url,
-                }
-
-        except asyncio.TimeoutError:
-            logger.warning(f"[COMPETITOR] Timeout: {api_url}")
-        except Exception as e:
-            logger.warning(f"[COMPETITOR] Xato: {e}")
+    # API ishlamadi, faqat HTML nom bor
+    if title_from_html:
+        logger.info(f"[COMP] Faqat HTML nom: {title_from_html[:40]}")
+        return {
+            "title": title_from_html[:60],
+            "price": 0, "min_price": 0, "max_price": 0,
+            "shop": "—", "rating": 0, "reviews": 0,
+            "product_id": product_id, "url": uzum_url,
+            "html_only": True,
+        }
 
     return None
 
@@ -459,7 +244,9 @@ async def check_saved_urls(
         for p in my_products:
             p_title = (p.get("title") or p.get("name") or "").lower()
             pn_lower = product_name.lower()
-            if pn_lower in p_title or p_title in pn_lower:
+            p_words = set(p_title.split())
+            n_words = set(pn_lower.split())
+            if (pn_lower in p_title) or (p_title in pn_lower) or (p_words & n_words):
                 for sku in p.get("skuList", [])[:1]:
                     my_price = float(sku.get("price") or sku.get("purchasePrice") or 0)
                 break
@@ -492,15 +279,12 @@ async def check_saved_urls(
             else:
                 lines.append(
                     f"{icon} <b>{product_name[:30]}</b>\n"
-                    f"   💰 Моя: {my_price:,.0f} | Рынок мин: {market_min:,.0f}{diff_str}\n"
+                    f"   💰 Моя: {my_price:,.0f} | Рынок: {market_min:,.0f}{diff_str}\n"
                     f"   🏪 {shop}{stars}{rev_str}"
                 )
         else:
             no_data = "Ma'lumot olinmadi" if lang == "uz" else "Данные не получены"
-            lines.append(
-                f"❓ <b>{product_name[:30]}</b>\n"
-                f"   {no_data}"
-            )
+            lines.append(f"❓ <b>{product_name[:30]}</b>\n   {no_data}")
         lines.append("")
 
     return "\n".join(lines).strip()
@@ -518,52 +302,51 @@ def format_single_product_report(
     reviews = info.get("reviews", 0)
     shop = info.get("shop", "—")
     title = info.get("title", product_name)
+    html_only = info.get("html_only", False)
 
     if lang == "uz":
-        lines = [
-            f"✅ <b>Saqlandi: {product_name}</b>", "",
-            f"📦 {title[:50]}",
-            f"🏪 {shop}",
-        ]
+        lines = [f"✅ <b>Saqlandi: {product_name}</b>", "", f"📦 {title[:50]}"]
+        if shop and shop != "—":
+            lines.append(f"🏪 {shop}")
         if rating > 0:
             lines.append(f"⭐ {rating:.1f} ({reviews} sharh)")
-        lines += ["", "💰 <b>Narxlar:</b>"]
         if market_min > 0:
-            lines.append(f"   Min: {market_min:,.0f} so'm")
-        if market_max > market_min:
-            lines.append(f"   Max: {market_max:,.0f} so'm")
-        if my_price > 0:
-            lines.append(f"   Mening: {my_price:,.0f} so'm")
-            if market_min > 0:
+            lines += ["", "💰 <b>Narxlar:</b>", f"   Min: {market_min:,.0f} so'm"]
+            if market_max > market_min:
+                lines.append(f"   Max: {market_max:,.0f} so'm")
+            if my_price > 0:
+                lines.append(f"   Mening: {my_price:,.0f} so'm")
                 pct = ((my_price - market_min) / market_min) * 100
                 if pct < -3:
-                    lines.append(f"✅ Narxingiz bozordan {abs(pct):.0f}% arzon!")
+                    lines.append(f"\n✅ Narxingiz bozordan {abs(pct):.0f}% arzon!")
                 elif pct > 10:
-                    lines.append(f"⚠️ Narxingiz bozordan {pct:.0f}% qimmat")
+                    lines.append(f"\n⚠️ Narxingiz bozordan {pct:.0f}% qimmat")
                 else:
-                    lines.append("🟡 Narxingiz bozor bilan teng")
+                    lines.append("\n🟡 Narxingiz bozor bilan teng")
+        elif html_only:
+            lines.append("\nℹ️ Narx ma'lumoti olinmadi (tovar yashirin bo'lishi mumkin)")
+        lines.append("\n📋 «Kuzatilayotganlar» tugmasi orqali tekshiring")
     else:
-        lines = [
-            f"✅ <b>Сохранено: {product_name}</b>", "",
-            f"📦 {title[:50]}",
-            f"🏪 {shop}",
-        ]
+        lines = [f"✅ <b>Сохранено: {product_name}</b>", "", f"📦 {title[:50]}"]
+        if shop and shop != "—":
+            lines.append(f"🏪 {shop}")
         if rating > 0:
             lines.append(f"⭐ {rating:.1f} ({reviews} отз.)")
-        lines += ["", "💰 <b>Цены:</b>"]
         if market_min > 0:
-            lines.append(f"   Мин: {market_min:,.0f} сум")
-        if market_max > market_min:
-            lines.append(f"   Макс: {market_max:,.0f} сум")
-        if my_price > 0:
-            lines.append(f"   Моя: {my_price:,.0f} сум")
-            if market_min > 0:
+            lines += ["", "💰 <b>Цены:</b>", f"   Мин: {market_min:,.0f} сум"]
+            if market_max > market_min:
+                lines.append(f"   Макс: {market_max:,.0f} сум")
+            if my_price > 0:
+                lines.append(f"   Моя: {my_price:,.0f} сум")
                 pct = ((my_price - market_min) / market_min) * 100
                 if pct < -3:
-                    lines.append(f"✅ Ваша цена на {abs(pct):.0f}% ниже рынка!")
+                    lines.append(f"\n✅ Ваша цена на {abs(pct):.0f}% ниже рынка!")
                 elif pct > 10:
-                    lines.append(f"⚠️ Ваша цена на {pct:.0f}% выше рынка")
+                    lines.append(f"\n⚠️ Ваша цена на {pct:.0f}% выше рынка")
                 else:
-                    lines.append("🟡 Ваша цена на уровне рынка")
+                    lines.append("\n🟡 Ваша цена на уровне рынка")
+        elif html_only:
+            lines.append("\nℹ️ Цена не получена (товар может быть скрыт)")
+        lines.append("\n📋 Проверяйте через кнопку «Отслеживаемые»")
 
     return "\n".join(lines)
