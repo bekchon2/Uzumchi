@@ -33,9 +33,10 @@ async def _get(endpoint: str, api_key: str, params: dict = None, retry: int = 2)
     await asyncio.sleep(0.3)
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=SSL_CONTEXT)) as session:
         async with session.get(url, headers=headers, params=params) as resp:
-            logger.info(f"GET {endpoint} → {resp.status}")
+            logger.info(f"GET {endpoint} params={params} → {resp.status}")
             if resp.status == 200:
-                return await resp.json()
+                data = await resp.json()
+                return data
             elif resp.status in (401, 403):
                 raise UzumAuthError(f"Auth error {resp.status}: {endpoint}")
             elif resp.status == 429:
@@ -92,22 +93,23 @@ async def get_products(api_key: str, shop_id: int) -> list[dict]:
         or data.get("payload", {}).get("products", [])
         or []
     )
-    # Debug: birinchi mahsulotning to'liq strukturasini log qilish
+
+    # SKU struktura debug — birinchi ishga tushganda log qilish
     if products:
         p = products[0]
         skus = p.get("skuList", [])
-        if skus:
-            logger.info(f"[DEBUG] First SKU keys: {list(skus[0].keys())}")
-            # characteristics strukturasini log qilish
-            chars = skus[0].get("characteristics") or skus[0].get("charValues") or []
-            if chars:
-                logger.info(f"[DEBUG] Characteristics sample: {json.dumps(chars[:2], ensure_ascii=False)}")
-            else:
-                # Boshqa possible key lar
-                for key in skus[0]:
-                    val = skus[0][key]
-                    if isinstance(val, (list, dict)) and val:
-                        logger.info(f"[DEBUG] SKU field '{key}': {json.dumps(val, ensure_ascii=False)[:200]}")
+        if len(skus) > 1:
+            # Ko'p SKU li mahsulotning strukturasini to'liq loglaymiz
+            sku = skus[0]
+            all_keys = list(sku.keys())
+            logger.info(f"[SKU_DEBUG] keys: {all_keys}")
+            # Barcha field larni tekshirish
+            for key in all_keys:
+                val = sku.get(key)
+                if isinstance(val, (list, dict)) and val:
+                    logger.info(f"[SKU_DEBUG] '{key}' = {json.dumps(val, ensure_ascii=False)[:300]}")
+                elif isinstance(val, str) and len(val) > 1:
+                    logger.info(f"[SKU_DEBUG] '{key}' = {val}")
     return products
 
 
@@ -122,54 +124,60 @@ def calc_total_qty(product: dict) -> int:
 def _get_sku_variant_name(sku: dict) -> str:
     """
     SKU dan rang/o'lcham nomini olish.
-    Uzum API da turli formatlar bo'lishi mumkin.
+    Uzum API da `characteristics` array bo'ladi:
+    [{"charName": "Цвет", "charValue": "Красный"}, ...]
     """
-    # Format 1: characteristics = [{"charName": "Цвет", "charValue": "Красный"}]
+    # Format 1 (asosiy): characteristics = [{"charName": "...", "charValue": "..."}]
     chars = sku.get("characteristics") or []
     if chars and isinstance(chars, list):
         vals = []
         for c in chars:
-            if isinstance(c, dict):
-                val = (
-                    c.get("charValue") or c.get("value")
-                    or c.get("name") or c.get("title") or ""
-                )
-                if val:
-                    vals.append(str(val))
+            if not isinstance(c, dict):
+                continue
+            val = (
+                c.get("charValue") or c.get("value")
+                or c.get("name") or c.get("title") or ""
+            )
+            if val and str(val).strip():
+                vals.append(str(val).strip())
         if vals:
             return " / ".join(vals)
 
-    # Format 2: charValues = [{"value": "Красный"}]
+    # Format 2: charValues = [{"value": "..."}]
     char_values = sku.get("charValues") or []
     if char_values and isinstance(char_values, list):
         vals = []
         for c in char_values:
             if isinstance(c, dict):
-                val = c.get("value") or c.get("title") or c.get("name") or ""
-                if val:
-                    vals.append(str(val))
+                val = (
+                    c.get("value") or c.get("title")
+                    or c.get("name") or c.get("charValue") or ""
+                )
+                if val and str(val).strip():
+                    vals.append(str(val).strip())
         if vals:
             return " / ".join(vals)
 
-    # Format 3: color, size to'g'ridan to'g'ri maydon
-    color = sku.get("color") or sku.get("Color") or ""
-    size = sku.get("size") or sku.get("Size") or ""
-    if color or size:
-        return " / ".join(filter(None, [str(color), str(size)]))
+    # Format 3: to'g'ridan maydon
+    for field in ["color", "Color", "colour", "size", "Size", "variant"]:
+        val = sku.get(field)
+        if val and str(val).strip() and str(val).strip().lower() not in ("none", "null", ""):
+            return str(val).strip()
 
-    # Format 4: title yoki name
+    # Format 4: title yoki name (lekin mahsulot nomidan farqli bo'lsa)
     title = sku.get("title") or sku.get("name") or ""
     if title:
-        return str(title)[:30]
+        return str(title)[:40]
 
-    # Format 5: id bo'yicha
+    # Oxirgi: ID
     sku_id = sku.get("id") or sku.get("skuId") or "?"
-    return f"#{sku_id}"
+    return f"ID:{sku_id}"
 
 
 def format_product_skus(product: dict, lang: str = "ru") -> str:
     """
     Mahsulotni barcha SKU variantlari bilan ko'rsatish.
+    Ko'p SKU bo'lsa: faqat variantlar, nom BIR MARTA.
     """
     name = product.get("title") or product.get("name") or "—"
     skus = product.get("skuList", [])
@@ -180,6 +188,7 @@ def format_product_skus(product: dict, lang: str = "ru") -> str:
 
     total_qty = sum(int(s.get("quantityActive") or 0) for s in skus)
     icon = stock_icon(total_qty)
+    short = short_name(name, 45)
 
     if len(skus) == 1:
         sku = skus[0]
@@ -190,21 +199,21 @@ def format_product_skus(product: dict, lang: str = "ru") -> str:
         days_str = str(days) if days < 9999 else "∞"
         if lang == "uz":
             return (
-                f"{icon} <b>{short_name(name, 45)}</b>\n"
+                f"{icon} <b>{short}</b>\n"
                 f"   📊 Qoldiq: <b>{qty}</b> dona | 💰 {price:,.0f} so'm\n"
                 f"   📈 Kunlik: {avg:.1f} | ⏳ {days_str} kun"
             )
         return (
-            f"{icon} <b>{short_name(name, 45)}</b>\n"
+            f"{icon} <b>{short}</b>\n"
             f"   📊 Остаток: <b>{qty}</b> шт. | 💰 {price:,.0f} сум\n"
             f"   📈 В день: {avg:.1f} | ⏳ {days_str} дн."
         )
     else:
-        # Ko'p SKU
+        # Ko'p SKU: nom BIR MARTA, keyin variantlar
         header = (
-            f"{icon} <b>{short_name(name, 45)}</b> (jami: <b>{total_qty}</b> dona)"
+            f"{icon} <b>{short}</b> (jami: <b>{total_qty}</b> dona)"
             if lang == "uz" else
-            f"{icon} <b>{short_name(name, 45)}</b> (всего: <b>{total_qty}</b> шт.)"
+            f"{icon} <b>{short}</b> (всего: <b>{total_qty}</b> шт.)"
         )
         lines = [header]
         for sku in skus:
@@ -237,11 +246,17 @@ async def get_finance_orders(
     limit: int = 100,
     offset: int = 0,
 ) -> dict:
+    """GET /v1/finance/orders"""
     if date_from is None:
         date_from = _days_ago_ms(1)
     if date_to is None:
         date_to = _now_ms()
-    params = {"dateFrom": date_from, "dateTo": date_to, "limit": limit, "offset": offset}
+    params = {
+        "dateFrom": date_from,
+        "dateTo": date_to,
+        "limit": limit,
+        "offset": offset,
+    }
     return await _get("/v1/finance/orders", api_key, params)
 
 
@@ -251,62 +266,99 @@ async def get_fbs_orders(
     date_to: int = None,
 ) -> list[dict]:
     """
-    Buyurtmalar olish. Barcha endpointlarni sinab ko'radi.
-    MUHIM: Buyurtma statuslari turlicha bo'lishi mumkin — barcha variantlarni loglaydi.
+    Buyurtmalar olish.
+    Strategiya:
+    1. /v2/fbs/orders — FBS buyurtmalar (statuslar: AWAITING_PACKAGING, AWAITING_DELIVER, DELIVERED, CANCELLED)
+    2. /v1/finance/orders — moliyaviy buyurtmalar (katta sana oraliqlar uchun)
+    Log da to'liq raw javobni ko'rsatadi.
     """
     if date_from is None:
         date_from = _days_ago_ms(1)
     if date_to is None:
         date_to = _now_ms()
 
-    # 1. FBS v2
+    # --- 1. FBS v2 ---
     try:
-        params = {"dateFrom": date_from, "dateTo": date_to, "limit": 100, "offset": 0}
+        # Swagger bo'yicha parametrlar: dateFrom, dateTo (ms), limit, offset
+        params = {
+            "dateFrom": date_from,
+            "dateTo": date_to,
+            "limit": 100,
+            "offset": 0,
+        }
         data = await _get("/v2/fbs/orders", api_key, params)
-        orders = (
-            data.get("payload", {}).get("orders", [])
-            or data.get("orders", [])
-            or (data if isinstance(data, list) else [])
-        )
-        if orders:
-            # Debug: birinchi buyurtma strukturasini ko'rish
-            logger.info(f"[DEBUG] FBS v2 order sample keys: {list(orders[0].keys())}")
-            logger.info(f"[DEBUG] FBS v2 order status sample: {orders[0].get('status')}")
-            logger.info(f"[DEBUG] FBS v2 orders count: {len(orders)}")
-            return orders
-        logger.info(f"[DEBUG] FBS v2 returned empty, payload: {json.dumps(data, ensure_ascii=False)[:500]}")
-    except (UzumAuthError, UzumAPIError) as e:
-        logger.warning(f"FBS v2 failed: {e}")
 
-    # 2. Finance orders
+        # To'liq raw javobni loglash
+        raw_str = json.dumps(data, ensure_ascii=False)[:800]
+        logger.info(f"[ORDERS_RAW] /v2/fbs/orders response: {raw_str}")
+
+        # Turli response formatlarini olish
+        orders = None
+        if isinstance(data, list):
+            orders = data
+        elif isinstance(data, dict):
+            payload = data.get("payload") or {}
+            orders = (
+                payload.get("orders")
+                or payload.get("orderList")
+                or data.get("orders")
+                or data.get("orderList")
+                or data.get("content")
+                or []
+            )
+
+        if orders:
+            logger.info(f"[ORDERS] FBS v2: {len(orders)} ta. Status namunasi: {orders[0].get('status', '?')}")
+            return orders
+        logger.warning(f"[ORDERS] FBS v2 bo'sh. Data keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
+
+    except UzumAuthError as e:
+        logger.warning(f"[ORDERS] FBS v2 auth xato: {e}")
+    except UzumAPIError as e:
+        logger.warning(f"[ORDERS] FBS v2 API xato: {e}")
+
+    # --- 2. Finance orders ---
     try:
         fin = await get_finance_orders(api_key, date_from, date_to)
-        items = fin.get("orderItems", []) or []
-        if items:
-            logger.info(f"[DEBUG] Finance order sample keys: {list(items[0].keys())}")
-            logger.info(f"[DEBUG] Finance order status: {items[0].get('status')}")
-        logger.info(f"Finance orders count: {len(items)}")
-        # Finance orders ham qaytaramiz, hatto bo'sh bo'lsa ham
-        return items
-    except Exception as e:
-        logger.warning(f"Finance orders failed: {e}")
+        raw_str = json.dumps(fin, ensure_ascii=False)[:800]
+        logger.info(f"[ORDERS_RAW] /v1/finance/orders response: {raw_str}")
 
-    # 3. v1 order
+        items = (
+            fin.get("orderItems")
+            or fin.get("orders")
+            or fin.get("content")
+            or []
+        )
+        if items:
+            logger.info(f"[ORDERS] Finance: {len(items)} ta")
+            return items
+        logger.warning(f"[ORDERS] Finance bo'sh. Keys: {list(fin.keys())}")
+
+    except UzumAuthError as e:
+        logger.warning(f"[ORDERS] Finance auth xato: {e}")
+    except Exception as e:
+        logger.warning(f"[ORDERS] Finance xato: {e}")
+
+    # --- 3. v1/order ---
     try:
         params = {"dateFrom": date_from, "dateTo": date_to, "limit": 100}
         data = await _get("/v1/order", api_key, params)
+        raw_str = json.dumps(data, ensure_ascii=False)[:500]
+        logger.info(f"[ORDERS_RAW] /v1/order response: {raw_str}")
+
         orders = (
-            data.get("orders", [])
-            or data.get("orderList", [])
+            data.get("orders") or data.get("orderList")
+            or data.get("content")
             or (data if isinstance(data, list) else [])
         )
         if orders:
-            logger.info(f"[DEBUG] v1/order sample: {list(orders[0].keys())}")
-        logger.info(f"v1/order count: {len(orders)}")
-        return orders
-    except Exception as e:
-        logger.warning(f"v1/order failed: {e}")
+            logger.info(f"[ORDERS] v1/order: {len(orders)} ta")
+            return orders
 
+    except Exception as e:
+        logger.warning(f"[ORDERS] v1/order xato: {e}")
+
+    logger.error("[ORDERS] Barcha endpointlar bo'sh qaytdi!")
     return []
 
 
@@ -326,7 +378,7 @@ async def get_invoices(api_key: str, shop_id: int) -> list[dict]:
         if isinstance(data, list):
             return data
         return data.get("invoices") or data.get("payload", []) or []
-    except UzumAPIError as e:
+    except Exception as e:
         logger.warning(f"get_invoices error: {e}")
         return []
 
@@ -334,6 +386,10 @@ async def get_invoices(api_key: str, shop_id: int) -> list[dict]:
 # ─── Returns ─────────────────────────────────────────────────────────────────
 
 async def get_returns(api_key: str, date_from: int = None, date_to: int = None) -> list[dict]:
+    """
+    Qaytarmalar.
+    Log da to'liq raw javob.
+    """
     if date_from is None:
         date_from = _days_ago_ms(30)
     if date_to is None:
@@ -341,40 +397,33 @@ async def get_returns(api_key: str, date_from: int = None, date_to: int = None) 
 
     params = {"dateFrom": date_from, "dateTo": date_to}
 
-    # 1. /v1/return
-    try:
-        data = await _get("/v1/return", api_key, params)
-        if isinstance(data, list):
-            logger.info(f"[DEBUG] Returns list, count: {len(data)}")
-            if data:
-                logger.info(f"[DEBUG] Return sample: {json.dumps(data[0], ensure_ascii=False)[:400]}")
-            return data
-        items = (
-            data.get("payload", [])
-            or data.get("returns", [])
-            or data.get("content", [])
-            or data.get("items", [])
-            or []
-        )
-        logger.info(f"[DEBUG] Returns keys: {list(data.keys())}, count: {len(items)}")
-        if items:
-            logger.info(f"[DEBUG] Return sample: {json.dumps(items[0], ensure_ascii=False)[:400]}")
-            return items
-        # Bo'sh bo'lsa ham qaytaramiz
-        return items
-    except Exception as e:
-        logger.warning(f"get_returns /v1/return error: {e}")
+    for endpoint in ["/v1/return", "/v2/return"]:
+        try:
+            data = await _get(endpoint, api_key, params)
+            raw_str = json.dumps(data, ensure_ascii=False)[:600]
+            logger.info(f"[RETURNS_RAW] {endpoint} response: {raw_str}")
 
-    # 2. /v2/return
-    try:
-        data = await _get("/v2/return", api_key, params)
-        if isinstance(data, list):
-            return data
-        items = data.get("payload", []) or data.get("returns", []) or []
-        logger.info(f"Returns /v2/return: {len(items)}")
-        return items
-    except Exception as e:
-        logger.warning(f"get_returns /v2/return error: {e}")
+            if isinstance(data, list):
+                if data:
+                    logger.info(f"[RETURNS] {endpoint}: {len(data)} ta. Namuna: {list(data[0].keys())}")
+                return data
+
+            if isinstance(data, dict):
+                items = (
+                    data.get("payload")
+                    or data.get("returns")
+                    or data.get("content")
+                    or data.get("items")
+                    or data.get("data")
+                    or []
+                )
+                if items:
+                    logger.info(f"[RETURNS] {endpoint}: {len(items)} ta. Keys: {list(data.keys())}")
+                    return items
+                logger.warning(f"[RETURNS] {endpoint} bo'sh. Keys: {list(data.keys())}")
+
+        except Exception as e:
+            logger.warning(f"[RETURNS] {endpoint} xato: {e}")
 
     return []
 
@@ -407,32 +456,33 @@ async def send_price_data(api_key: str, shop_id: int, price_data: list[dict]) ->
 
 def summarize_orders(orders: list[dict]) -> dict:
     """
-    Buyurtmalardan statistika. Status field turlicha bo'lishi mumkin.
-    Barcha statuslarni loglaydi (debug uchun).
+    Buyurtmalar statistikasi.
+    Uzum FBS statuslari: AWAITING_PACKAGING, AWAITING_DELIVER, DELIVERED, CANCELLED
+    Finance statuslari: COMPLETED, CLOSED, RETURNED, PAID, ...
     """
     if orders:
-        statuses = list({o.get("status", "?") for o in orders})
-        logger.info(f"[DEBUG] Order statuses found: {statuses}")
+        statuses = list({str(o.get("status") or o.get("orderStatus") or "?") for o in orders})
+        logger.info(f"[ORDERS] Statuslar: {statuses}")
 
     total = len(orders)
 
-    # Status nomlariga tolerant yondashuv
-    def match(o: dict, *keywords) -> bool:
+    def has(o: dict, *kw) -> bool:
         st = str(o.get("status") or o.get("orderStatus") or "").upper()
-        return any(k in st for k in keywords)
+        return any(k.upper() in st for k in kw)
 
-    delivered = sum(1 for o in orders if match(o, "DELIVER", "DONE", "COMPLETED", "FINISH"))
-    cancelled = sum(1 for o in orders if match(o, "CANCEL", "REJECT", "RETURN"))
-    processing = sum(1 for o in orders if match(o, "PROCESS", "PENDING", "WAIT", "NEW", "CREATED"))
-    shipped = sum(1 for o in orders if match(o, "SHIP", "TRANSIT", "WAY", "SENT"))
+    # Uzum FBS aniq statuslar
+    delivered = sum(1 for o in orders if has(o, "DELIVER", "DONE", "COMPLET", "FINISH", "CLOSED", "PAID"))
+    cancelled = sum(1 for o in orders if has(o, "CANCEL", "REJECT", "RETURN"))
+    processing = sum(1 for o in orders if has(o, "PACKAG", "PROCESS", "PENDING", "WAIT", "NEW", "CREAT", "ACCEPT"))
+    shipped = sum(1 for o in orders if has(o, "SHIP", "TRANSIT", "DELIVER_IN", "SENT", "COURIER"))
 
-    # Tushum: yetkazilgan + yetkazilishi aniq bo'lganlar
     revenue = 0.0
     for o in orders:
-        if match(o, "DELIVER", "DONE", "COMPLETED"):
+        if has(o, "DELIVER", "DONE", "COMPLET", "FINISH", "CLOSED", "PAID"):
             revenue += float(
                 o.get("finalPrice") or o.get("price") or
-                o.get("orderPrice") or o.get("totalPrice") or 0
+                o.get("orderPrice") or o.get("totalPrice") or
+                o.get("amount") or 0
             )
 
     return {

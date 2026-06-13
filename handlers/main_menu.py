@@ -14,7 +14,11 @@ from services.uzum_api import (
     summarize_orders, calc_total_qty, format_product_skus,
     _days_ago_ms, _now_ms
 )
-from services.storage_tracker import get_storage_alerts
+from services.competitor_monitor import (
+    get_product_info_by_url,
+    check_saved_urls,
+    format_single_product_report,
+)
 from locales.i18n import t
 from utils.keyboards import (
     main_menu_keyboard, settings_keyboard,
