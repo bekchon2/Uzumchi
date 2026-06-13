@@ -16,7 +16,10 @@ from services.uzum_api import (
     _days_ago_ms, _now_ms
 )
 from services.storage_tracker import parse_invoices, format_storage_report, get_storage_alerts
-from services.competitor_monitor import get_product_prices, format_competitor_report
+from services.competitor_monitor import (
+    get_product_info_by_url, check_saved_urls,
+    format_single_product_report
+)
 from locales.i18n import t
 from utils.keyboards import (
     main_menu_keyboard, settings_keyboard,
@@ -33,8 +36,12 @@ router = Router()
 PRODUCTS_PER_PAGE = 5  # SKU ko'rsatish uchun kamroq sahifada
 
 
+# ─── Raqib narx monitoring ────────────────────────────────────────────────────
+
 class CompetitorStates(StatesGroup):
     waiting_product_name = State()
+    waiting_url = State()
+    waiting_url_name = State()
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -337,64 +344,156 @@ async def cmd_competitor(message: Message):
 async def competitor_search_start(callback: CallbackQuery, state: FSMContext):
     user = await get_user(callback.from_user.id)
     lang = user.get("lang", "ru") if user else "ru"
-    await callback.message.answer(t("competitor_ask_name", lang), parse_mode="HTML")
-    await state.set_state(CompetitorStates.waiting_product_name)
+    if lang == "uz":
+        text = (
+            "🔗 <b>Uzum tovar sahifasining havolasini yuboring</b>\n\n"
+            "Masalan:\n<code>https://uzum.uz/ru/product/suv-shari-123456</code>\n\n"
+            "Havola botda saqlanadi va kuzatib boriladi."
+        )
+    else:
+        text = (
+            "🔗 <b>Отправьте ссылку на товар в Uzum</b>\n\n"
+            "Например:\n<code>https://uzum.uz/ru/product/vodyanoy-shar-123456</code>\n\n"
+            "Ссылка сохранится и будет отслеживаться."
+        )
+    await callback.message.answer(text, parse_mode="HTML")
+    await state.set_state(CompetitorStates.waiting_url)
     await callback.answer()
+
+
+@router.message(CompetitorStates.waiting_url)
+async def competitor_url_received(message: Message, state: FSMContext):
+    user = await get_user(message.from_user.id)
+    lang = user.get("lang", "ru") if user else "ru"
+
+    url = (message.text or "").strip()
+
+    # Orqaga
+    if url in ["🔙 Назад", "🔙 Orqaga"]:
+        await state.clear()
+        return
+
+    # URL tekshiruvi
+    if "uzum.uz" not in url.lower() and not url.startswith("http"):
+        await message.answer(
+            "❌ Bu Uzum URL emas. uzum.uz dan havola yuboring." if lang == "uz"
+            else "❌ Это не Uzum URL. Отправьте ссылку с uzum.uz"
+        )
+        return
+
+    await state.update_data(url=url)
+
+    # Tovar nomi so'rash
+    if lang == "uz":
+        text = "📝 Bu tovar uchun qisqa nom kiriting (masalan: <i>Suv shari qizil</i>):"
+    else:
+        text = "📝 Введите короткое название для этого товара (например: <i>Водяной шар красный</i>):"
+    await message.answer(text, parse_mode="HTML")
+    await state.set_state(CompetitorStates.waiting_url_name)
+
+
+@router.message(CompetitorStates.waiting_url_name)
+async def competitor_url_name_received(message: Message, state: FSMContext):
+    user = await get_user(message.from_user.id)
+    lang = user.get("lang", "ru") if user else "ru"
+
+    product_name = (message.text or "").strip()
+    if not product_name:
+        return
+
+    data = await state.get_data()
+    url = data.get("url", "")
+
+    msg = await message.answer(
+        "⏳ Tovar ma'lumotlari tekshirilmoqda..." if lang == "uz"
+        else "⏳ Проверяю данные товара..."
+    )
+
+    # URL dan tovar ma'lumotlarini olish
+    from services.competitor_monitor import get_product_info_by_url
+    info = await get_product_info_by_url(url)
+
+    if not info:
+        await msg.edit_text(
+            "⚠️ URL dan ma'lumot olinmadi. URL to'g'riligini tekshiring." if lang == "uz"
+            else "⚠️ Не удалось получить данные по URL. Проверьте правильность ссылки."
+        )
+        await state.clear()
+        return
+
+    # DB ga saqlash
+    from database import add_product_url
+    await add_product_url(
+        user_id=message.from_user.id,
+        shop_id=user["shop_id"],
+        product_name=product_name,
+        uzum_url=url
+    )
+
+    # Mening narximni topish
+    products = await get_products(user["api_key"], user["shop_id"])
+    my_price = 0.0
+    for p in products:
+        p_title = (p.get("title") or p.get("name") or "").lower()
+        if product_name.lower() in p_title or p_title in product_name.lower():
+            for sku in p.get("skuList", [])[:1]:
+                my_price = safe_float(sku.get("price") or sku.get("purchasePrice"))
+            break
+
+    report = format_single_product_report(product_name, my_price, info, lang)
+
+    if lang == "uz":
+        success = f"✅ <b>'{product_name}' saqlandi!</b>\n\n{report}"
+    else:
+        success = f"✅ <b>'{product_name}' сохранён!</b>\n\n{report}"
+
+    await msg.edit_text(success, parse_mode="HTML")
+    await state.clear()
 
 
 @router.message(CompetitorStates.waiting_product_name)
 async def competitor_search_process(message: Message, state: FSMContext):
+    """Eski qidiruv — endi URL ga yo'naltiradi."""
+    await state.clear()
     user = await get_user(message.from_user.id)
     lang = user.get("lang", "ru") if user else "ru"
-
-    product_name = message.text.strip() if message.text else ""
-    if not product_name or product_name in [t("btn_back", lang), "🔙 Назад", "🔙 Orqaga"]:
-        await state.clear()
-        await message.answer(
-            t("main_menu", lang, shop_name=user.get("shop_name", "—") if user else "—"),
-            reply_markup=main_menu_keyboard(lang), parse_mode="HTML"
-        )
-        return
-
-    msg = await message.answer(t("competitor_searching", lang), parse_mode="HTML")
-
-    try:
-        products = await get_products(user["api_key"], user["shop_id"])
-        my_price = 0.0
-        for p in products:
-            if product_name.lower() in (p.get("title") or p.get("name") or "").lower():
-                for sku in p.get("skuList", [])[:1]:
-                    my_price = safe_float(sku.get("price") or sku.get("purchasePrice"))
-                break
-
-        competitors = await get_product_prices(product_name)
-        if not competitors:
-            await msg.edit_text(t("competitor_not_found", lang), parse_mode="HTML")
-        else:
-            report = format_competitor_report(product_name, my_price, competitors, lang)
-            await msg.edit_text(report, parse_mode="HTML")
-
-    except Exception as e:
-        logger.error(f"Competitor error: {e}")
-        await msg.edit_text(f"❌ <code>{str(e)[:200]}</code>", parse_mode="HTML")
-
-    await state.clear()
+    await message.answer(
+        "🔗 Iltimos Uzum tovar havolasini yuboring." if lang == "uz"
+        else "🔗 Пожалуйста, отправьте ссылку на товар в Uzum."
+    )
 
 
 @router.callback_query(F.data == "competitor_list")
 async def competitor_list(callback: CallbackQuery):
-    from database import get_competitor_tracking
+    """Saqlangan URL larni tekshirish."""
+    from database import get_product_urls
     user = await get_user(callback.from_user.id)
     lang = user.get("lang", "ru") if user else "ru"
-    tracked = await get_competitor_tracking(callback.from_user.id, user.get("shop_id", 0))
-    if not tracked:
-        text = "📋 Нет отслеживаемых товаров." if lang == "ru" else "📋 Kuzatilayotgan mahsulotlar yo'q."
-    else:
-        lines = ["📋 <b>Отслеживаемые:</b>"]
-        for item in tracked:
-            lines.append(f"• {item['product_name']} — {item['my_price']:,.0f}")
-        text = "\n".join(lines)
-    await callback.message.edit_text(text, parse_mode="HTML")
+
+    msg = await callback.message.answer(
+        "⏳ Narxlar tekshirilmoqda..." if lang == "uz"
+        else "⏳ Проверяю цены...",
+        parse_mode="HTML"
+    )
+
+    saved_urls = await get_product_urls(callback.from_user.id, user.get("shop_id", 0))
+
+    if not saved_urls:
+        await msg.edit_text(
+            "📋 Kuzatilayotgan tovarlar yo'q.\n\n"
+            "🔗 <b>Qo'shish uchun:</b> «Narx qidirish» → Uzum sahifa URL sini yuboring." if lang == "uz"
+            else
+            "📋 Нет отслеживаемых товаров.\n\n"
+            "🔗 <b>Чтобы добавить:</b> «Поиск цен» → Отправьте URL страницы товара на Uzum.",
+            parse_mode="HTML"
+        )
+        await callback.answer()
+        return
+
+    # Tovarlar ma'lumotlari + narx tekshiruv
+    products = await get_products(user["api_key"], user["shop_id"])
+    report = await check_saved_urls(user["api_key"], products, saved_urls, lang)
+    await msg.edit_text(report, parse_mode="HTML", disable_web_page_preview=True)
     await callback.answer()
 
 

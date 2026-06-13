@@ -42,6 +42,17 @@ async def init_db():
                 added_at    INTEGER DEFAULT (strftime('%s','now'))
             )
         """)
+        # Uzum tovar URL lar jadval (foydalanuvchi o'zi qo'shadi)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS product_urls (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      INTEGER,
+                shop_id      INTEGER,
+                product_name TEXT,
+                uzum_url     TEXT,
+                added_at     INTEGER DEFAULT (strftime('%s','now'))
+            )
+        """)
         await db.commit()
 
         # Eski DB ustunlarini qo'shish (migration)
@@ -52,6 +63,22 @@ async def init_db():
             pass
         try:
             await db.execute("ALTER TABLE users ADD COLUMN active_shop_id INTEGER DEFAULT 0")
+            await db.commit()
+        except Exception:
+            pass
+
+        # Migration: product_urls jadval
+        try:
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS product_urls (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id      INTEGER,
+                    shop_id      INTEGER,
+                    product_name TEXT,
+                    uzum_url     TEXT,
+                    added_at     INTEGER DEFAULT (strftime('%s','now'))
+                )
+            """)
             await db.commit()
         except Exception:
             pass
@@ -188,5 +215,44 @@ async def delete_competitor_tracking(tracking_id: int, user_id: int):
         await db.execute(
             "DELETE FROM competitor_tracking WHERE id=? AND user_id=?",
             (tracking_id, user_id)
+        )
+        await db.commit()
+
+
+# ─── Product URLs (Uzum sahifa linklari) ──────────────────────────────────────
+
+async def add_product_url(user_id: int, shop_id: int, product_name: str, uzum_url: str):
+    """Foydalanuvchi qo'shgan Uzum tovar URL ni saqlash."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        # Xuddi shunday URL takrorlanmasin
+        await db.execute(
+            "DELETE FROM product_urls WHERE user_id=? AND shop_id=? AND uzum_url=?",
+            (user_id, shop_id, uzum_url)
+        )
+        await db.execute(
+            "INSERT INTO product_urls (user_id, shop_id, product_name, uzum_url) VALUES (?,?,?,?)",
+            (user_id, shop_id, product_name, uzum_url)
+        )
+        await db.commit()
+
+
+async def get_product_urls(user_id: int, shop_id: int) -> list[dict]:
+    """Foydalanuvchining saqlangan URL larini olish."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM product_urls WHERE user_id=? AND shop_id=? ORDER BY added_at DESC",
+            (user_id, shop_id)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(r) for r in rows]
+
+
+async def delete_product_url(url_id: int, user_id: int):
+    """URL ni o'chirish."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "DELETE FROM product_urls WHERE id=? AND user_id=?",
+            (url_id, user_id)
         )
         await db.commit()

@@ -1,10 +1,12 @@
 """
-Raqib narx monitoring servisi.
-Uzum ochiq sayt API orqali mahsulot narxlarini qidiradi.
+Raqib narx monitoring.
+Foydalanuvchi Uzum tovar sahifa URL sini beradi.
+Bot o'sha tovarning shaxsiy kabinetdagi narxi bilan taqqoslaydi.
 """
 import asyncio
 import logging
 import ssl
+import re
 import aiohttp
 
 logger = logging.getLogger(__name__)
@@ -12,28 +14,6 @@ logger = logging.getLogger(__name__)
 SSL_CONTEXT = ssl.create_default_context()
 SSL_CONTEXT.check_hostname = False
 SSL_CONTEXT.verify_mode = ssl.CERT_NONE
-
-# Uzum public API endpointlari (ro'yxatdan sinab o'tiladi)
-SEARCH_ENDPOINTS = [
-    {
-        "url": "https://api.uzum.uz/api/v2/search/products",
-        "params": lambda q, n: {"query": q, "size": n, "page": 0},
-        "products_key": lambda d: d.get("payload", {}).get("products", []) if isinstance(d, dict) else [],
-    },
-    {
-        "url": "https://api.uzum.uz/api/main/search/product",
-        "params": lambda q, n: {"keyword": q, "size": n, "page": 0},
-        "products_key": lambda d: d.get("payload", {}).get("products", []) if isinstance(d, dict) else [],
-    },
-    {
-        "url": "https://api.uzum.uz/api/v1/search",
-        "params": lambda q, n: {"query": q, "limit": n},
-        "products_key": lambda d: (
-            d.get("products", []) or d.get("items", [])
-            if isinstance(d, dict) else (d if isinstance(d, list) else [])
-        ),
-    },
-]
 
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
@@ -44,21 +24,52 @@ HEADERS = {
 }
 
 
-async def search_products_by_name(query: str, limit: int = 20) -> list[dict]:
+def extract_product_id_from_url(url: str) -> str | None:
     """
-    Uzum katalogidan mahsulot qidirish. Bir nechta endpoint sinab ko'riladi.
+    Uzum URL dan product ID ni ajratib olish.
+    Formatlar:
+    - https://uzum.uz/ru/product/nomi-123456
+    - https://uzum.uz/uz/product/nomi-123456
+    - https://uzum.uz/product/nomi-123456
     """
-    await asyncio.sleep(0.5)
+    url = url.strip()
+    # Oxirgi raqam guruhini olish
+    match = re.search(r'/product/[^/?#]*?-?(\d{5,})', url)
+    if match:
+        return match.group(1)
+    # Faqat raqam
+    match = re.search(r'(\d{5,})', url)
+    if match:
+        return match.group(1)
+    return None
+
+
+async def get_product_info_by_url(uzum_url: str) -> dict | None:
+    """
+    Uzum tovar sahifa URL dan tovar ma'lumotlarini olish.
+    Returns: {"title": "...", "price": 99000, "min_price": 80000, "shop": "...", "rating": 4.8, "reviews": 120}
+    """
+    product_id = extract_product_id_from_url(uzum_url)
+    if not product_id:
+        logger.warning(f"Cannot extract product ID from URL: {uzum_url}")
+        return None
+
+    # Uzum public API dan ma'lumot olish
+    api_urls = [
+        f"https://api.uzum.uz/api/v2/product/{product_id}",
+        f"https://api.uzum.uz/api/v1/product/{product_id}",
+        f"https://api.uzum.uz/api/main/product/{product_id}",
+    ]
 
     async with aiohttp.ClientSession(
         connector=aiohttp.TCPConnector(ssl=SSL_CONTEXT),
         headers=HEADERS
     ) as session:
-        for ep in SEARCH_ENDPOINTS:
+        for api_url in api_urls:
             try:
-                params = ep["params"](query, limit)
+                await asyncio.sleep(0.5)
                 async with session.get(
-                    ep["url"], params=params,
+                    api_url,
                     timeout=aiohttp.ClientTimeout(total=12)
                 ) as resp:
                     if resp.status == 200:
@@ -67,158 +78,203 @@ async def search_products_by_name(query: str, limit: int = 20) -> list[dict]:
                         except Exception:
                             data = await resp.json(content_type=None)
 
-                        products = ep["products_key"](data)
-                        if products:
-                            logger.info(f"Competitor search OK: {ep['url']} → {len(products)} items")
-                            return products
-                        else:
-                            logger.info(f"Empty result from {ep['url']}, keys: {list(data.keys()) if isinstance(data, dict) else type(data)}")
+                        # Response parse
+                        product = data.get("payload") or data.get("product") or data
+                        if isinstance(product, dict) and product:
+                            title = (
+                                product.get("title") or product.get("name")
+                                or product.get("productName") or "—"
+                            )
+                            # Narxlar
+                            skus = product.get("skuList") or product.get("skus") or []
+                            prices = []
+                            for s in skus:
+                                p = (
+                                    s.get("purchasePrice") or s.get("sellPrice")
+                                    or s.get("price") or s.get("minSellPrice") or 0
+                                )
+                                if float(p) > 0:
+                                    prices.append(float(p))
+
+                            min_price = min(prices) if prices else 0
+                            max_price = max(prices) if prices else 0
+                            avg_price = sum(prices) / len(prices) if prices else 0
+
+                            if not prices:
+                                min_price = float(
+                                    product.get("minSellPrice") or product.get("price")
+                                    or product.get("sellPrice") or 0
+                                )
+                                avg_price = min_price
+                                max_price = min_price
+
+                            shop = product.get("shop") or product.get("seller") or {}
+                            shop_name = (
+                                shop.get("name") or shop.get("shopName")
+                                if isinstance(shop, dict) else str(shop)
+                            ) or "—"
+
+                            rating = float(
+                                product.get("rating") or product.get("avgRating")
+                                or product.get("reviewRating") or 0
+                            )
+                            reviews = int(
+                                product.get("reviewCount") or product.get("totalReviews")
+                                or product.get("reviewsCount") or 0
+                            )
+
+                            logger.info(f"Product found: {title[:40]}, price: {min_price}")
+                            return {
+                                "title": str(title)[:60],
+                                "price": avg_price,
+                                "min_price": min_price,
+                                "max_price": max_price,
+                                "shop": shop_name,
+                                "rating": rating,
+                                "reviews": reviews,
+                                "product_id": product_id,
+                                "url": uzum_url,
+                            }
                     else:
-                        logger.warning(f"Competitor search {ep['url']} → HTTP {resp.status}")
-            except asyncio.TimeoutError:
-                logger.warning(f"Timeout: {ep['url']}")
+                        logger.debug(f"API {api_url} → {resp.status}")
             except Exception as e:
-                logger.warning(f"Error {ep['url']}: {e}")
-
-    logger.warning(f"All endpoints failed for '{query}'")
-    return []
-
-
-async def get_product_prices(product_name: str, limit: int = 15) -> list[dict]:
-    """
-    Mahsulot nomi bo'yicha bozor narxlarini olish.
-    """
-    products = await search_products_by_name(product_name, limit=limit)
-    result = []
-
-    for p in products:
-        try:
-            # Narx — turli formatlarda bo'lishi mumkin
-            price = None
-            for sku in (p.get("skuList") or p.get("skus") or []):
-                val = (
-                    sku.get("purchasePrice") or sku.get("sellPrice")
-                    or sku.get("price") or sku.get("salePrice")
-                )
-                if val and float(val) > 0:
-                    price = float(val)
-                    break
-
-            if price is None:
-                price = float(
-                    p.get("minSellPrice") or p.get("sellPrice") or p.get("price")
-                    or p.get("minPrice") or p.get("currentPrice") or 0
-                )
-
-            if price <= 0:
+                logger.debug(f"Error {api_url}: {e}")
                 continue
 
-            title = str(p.get("title") or p.get("name") or p.get("productName") or "—")[:60]
-            shop = p.get("shop") or p.get("seller") or {}
-            shop_name = (
-                shop.get("name") or shop.get("shopName") or shop.get("title")
-                if isinstance(shop, dict) else str(shop)
-            ) or "—"
-            rating = float(p.get("rating") or p.get("reviewRating") or p.get("avgRating") or 0)
-
-            result.append({
-                "title": title,
-                "price": price,
-                "shop": str(shop_name)[:40],
-                "rating": rating,
-                "product_id": p.get("id"),
-            })
-        except Exception as e:
-            logger.debug(f"Parse error: {e}")
-            continue
-
-    return result
+    logger.warning(f"Could not get product info for URL: {uzum_url}")
+    return None
 
 
-def format_competitor_report(
-    my_product_name: str,
+async def check_saved_urls(api_key: str, my_products: list[dict], saved_urls: list[dict], lang: str = "ru") -> str:
+    """
+    Saqlangan URL lar bo'yicha narx taqqoslash.
+    my_products — shaxsiy kabinet mahsulotlari
+    saved_urls — DB da saqlangan URL lar
+    """
+    if not saved_urls:
+        if lang == "uz":
+            return "📋 Kuzatilayotgan tovarlar yo'q.\n\n🔗 URL qo'shish uchun tugmani bosing."
+        return "📋 Нет отслеживаемых товаров.\n\n🔗 Нажмите кнопку чтобы добавить URL."
+
+    lines = [
+        "🔍 <b>Narx monitoringi</b>" if lang == "uz" else "🔍 <b>Мониторинг цен</b>",
+        f"{'(kuzatilayotgan tovarlar)' if lang == 'uz' else '(отслеживаемые товары)'}",
+        ""
+    ]
+
+    for item in saved_urls:
+        product_name = item.get("product_name") or "—"
+        uzum_url = item.get("uzum_url") or ""
+
+        # Mening narximni topish
+        my_price = 0.0
+        for p in my_products:
+            p_name = (p.get("title") or p.get("name") or "").lower()
+            if product_name.lower() in p_name or p_name in product_name.lower():
+                for sku in p.get("skuList", [])[:1]:
+                    my_price = float(sku.get("price") or sku.get("purchasePrice") or 0)
+                break
+
+        # Uzum sahifadan narx olish
+        info = await get_product_info_by_url(uzum_url)
+        await asyncio.sleep(0.5)
+
+        if info:
+            market_price = info["min_price"] or info["price"]
+            diff = ""
+            if my_price > 0 and market_price > 0:
+                pct = ((my_price - market_price) / market_price) * 100
+                if abs(pct) < 3:
+                    icon = "🟡"
+                    diff = f" (teng)" if lang == "uz" else f" (равно)"
+                elif my_price < market_price:
+                    icon = "🟢"
+                    diff = f" (-{abs(pct):.0f}%)" if lang == "uz" else f" (-{abs(pct):.0f}%)"
+                else:
+                    icon = "🔴"
+                    diff = f" (+{pct:.0f}%)"
+            else:
+                icon = "⚪"
+
+            if lang == "uz":
+                lines.append(
+                    f"{icon} <b>{product_name[:30]}</b>\n"
+                    f"   💰 Mening: {my_price:,.0f} | Bozor min: {market_price:,.0f}{diff}\n"
+                    f"   🏪 {info['shop']} | ⭐{info['rating']:.1f} ({info['reviews']} sharh)"
+                )
+            else:
+                lines.append(
+                    f"{icon} <b>{product_name[:30]}</b>\n"
+                    f"   💰 Моя: {my_price:,.0f} | Рынок мин: {market_price:,.0f}{diff}\n"
+                    f"   🏪 {info['shop']} | ⭐{info['rating']:.1f} ({info['reviews']} отз.)"
+                )
+        else:
+            lines.append(
+                f"⚠️ <b>{product_name[:30]}</b>\n"
+                f"   {'Ma\'lumot olinmadi' if lang == 'uz' else 'Данные не получены'}"
+            )
+        lines.append("")
+
+    return "\n".join(lines).strip()
+
+
+def format_single_product_report(
+    product_name: str,
     my_price: float,
-    competitors: list[dict],
+    info: dict,
     lang: str = "ru"
 ) -> str:
-    """Raqib narxlari tahlili."""
-    if not competitors:
-        return (
-            f"🔍 <b>{my_product_name[:40]}</b>\n\nRaqiblar topilmadi."
-            if lang == "uz" else
-            f"🔍 <b>{my_product_name[:40]}</b>\n\nКонкуренты не найдены."
-        )
-
-    sorted_c = sorted(competitors, key=lambda x: x["price"])
-    min_p = sorted_c[0]["price"]
-    max_p = sorted_c[-1]["price"]
-    avg_p = sum(c["price"] for c in sorted_c) / len(sorted_c)
-    cheaper = sum(1 for c in sorted_c if c["price"] < my_price) if my_price > 0 else 0
-    pricier = sum(1 for c in sorted_c if c["price"] > my_price * 1.05) if my_price > 0 else 0
+    """Bitta URL bo'yicha taqqoslash hisoboti."""
+    market_min = info.get("min_price", 0) or info.get("price", 0)
+    market_max = info.get("max_price", 0) or market_min
+    rating = info.get("rating", 0)
+    reviews = info.get("reviews", 0)
+    shop = info.get("shop", "—")
+    title = info.get("title", product_name)
 
     if lang == "uz":
         lines = [
-            f"🔍 <b>Raqib narx tahlili</b>",
-            f"📦 <b>{my_product_name[:40]}</b>",
-        ]
-        if my_price > 0:
-            lines.append(f"💰 Mening narxim: <b>{my_price:,.0f} so'm</b>")
-        lines += [
+            f"🔍 <b>Narx taqqoslash</b>",
+            f"📦 <b>{title[:50]}</b>",
             f"",
-            f"📊 <b>Bozor ({len(sorted_c)} raqib):</b>",
-            f"  🟢 Eng arzon: {min_p:,.0f} so'm",
-            f"  🟡 O'rtacha: {avg_p:,.0f} so'm",
-            f"  🔴 Eng qimmat: {max_p:,.0f} so'm",
         ]
         if my_price > 0:
-            if my_price <= min_p * 1.05:
-                lines.append("✅ Siz bozorda eng arzon!")
-            elif my_price > avg_p * 1.1:
-                diff = ((my_price / avg_p) - 1) * 100
-                lines.append(f"⚠️ Narxingiz o'rtachadan {diff:.0f}% yuqori")
+            lines.append(f"💰 <b>Mening narxim:</b> {my_price:,.0f} so'm")
+        lines += [
+            f"🏪 <b>Uzum bozori:</b>",
+            f"   Min: {market_min:,.0f} | Max: {market_max:,.0f} so'm",
+            f"   Do'kon: {shop}",
+            f"   ⭐ {rating:.1f} ({reviews} sharh)",
+        ]
+        if my_price > 0 and market_min > 0:
+            pct = ((my_price - market_min) / market_min) * 100
+            if pct < -3:
+                lines.append(f"\n✅ Narxingiz bozordan {abs(pct):.0f}% arzon — yaxshi!")
+            elif pct > 10:
+                lines.append(f"\n⚠️ Narxingiz bozordan {pct:.0f}% qimmat")
             else:
-                lines.append("🟡 Narxingiz raqobatbardosh")
-            lines.append(f"💡 Sizdan arzon: {cheaper} ta | Sizdan qimmat: {pricier} ta")
-
-        lines.append("\n<b>Top-5 raqib:</b>")
-        for i, c in enumerate(sorted_c[:5], 1):
-            if my_price > 0:
-                icon = "🟢" if c["price"] < my_price else ("🟡" if c["price"] <= my_price * 1.05 else "🔴")
-            else:
-                icon = f"{i}."
-            stars = f" ⭐{c['rating']:.1f}" if c["rating"] > 0 else ""
-            lines.append(f"{icon} {c['shop']}: <b>{c['price']:,.0f}</b> so'm{stars}")
+                lines.append(f"\n🟡 Narxingiz bozor bilan teng")
     else:
         lines = [
-            f"🔍 <b>Анализ цен конкурентов</b>",
-            f"📦 <b>{my_product_name[:40]}</b>",
-        ]
-        if my_price > 0:
-            lines.append(f"💰 Моя цена: <b>{my_price:,.0f} сум</b>")
-        lines += [
+            f"🔍 <b>Анализ цены</b>",
+            f"📦 <b>{title[:50]}</b>",
             f"",
-            f"📊 <b>Рынок ({len(sorted_c)} конк.):</b>",
-            f"  🟢 Минимум: {min_p:,.0f} сум",
-            f"  🟡 Среднее: {avg_p:,.0f} сум",
-            f"  🔴 Максимум: {max_p:,.0f} сум",
         ]
         if my_price > 0:
-            if my_price <= min_p * 1.05:
-                lines.append("✅ Вы на минимуме рынка!")
-            elif my_price > avg_p * 1.1:
-                diff = ((my_price / avg_p) - 1) * 100
-                lines.append(f"⚠️ Цена выше среднего на {diff:.0f}%")
+            lines.append(f"💰 <b>Моя цена:</b> {my_price:,.0f} сум")
+        lines += [
+            f"🏪 <b>Рынок Uzum:</b>",
+            f"   Мин: {market_min:,.0f} | Макс: {market_max:,.0f} сум",
+            f"   Магазин: {shop}",
+            f"   ⭐ {rating:.1f} ({reviews} отз.)",
+        ]
+        if my_price > 0 and market_min > 0:
+            pct = ((my_price - market_min) / market_min) * 100
+            if pct < -3:
+                lines.append(f"\n✅ Ваша цена на {abs(pct):.0f}% ниже рынка — хорошо!")
+            elif pct > 10:
+                lines.append(f"\n⚠️ Ваша цена на {pct:.0f}% выше рынка")
             else:
-                lines.append("🟡 Цена конкурентоспособна")
-            lines.append(f"💡 Дешевле вас: {cheaper} | Дороже вас: {pricier}")
-
-        lines.append("\n<b>Топ-5 конкурентов:</b>")
-        for i, c in enumerate(sorted_c[:5], 1):
-            if my_price > 0:
-                icon = "🟢" if c["price"] < my_price else ("🟡" if c["price"] <= my_price * 1.05 else "🔴")
-            else:
-                icon = f"{i}."
-            stars = f" ⭐{c['rating']:.1f}" if c["rating"] > 0 else ""
-            lines.append(f"{icon} {c['shop']}: <b>{c['price']:,.0f}</b> сум{stars}")
+                lines.append(f"\n🟡 Ваша цена на уровне рынка")
 
     return "\n".join(lines)

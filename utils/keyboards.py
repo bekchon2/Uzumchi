@@ -80,7 +80,7 @@ def competitor_keyboard(lang: str = "ru") -> InlineKeyboardMarkup:
     """Raqib narx monitoring tugmalari."""
     builder = InlineKeyboardBuilder()
     builder.button(
-        text="🔍 " + ("Narx qidirish" if lang == "uz" else "Поиск цен"),
+        text="🔗 " + ("URL qo'shish" if lang == "uz" else "Добавить URL"),
         callback_data="competitor_search"
     )
     builder.button(
