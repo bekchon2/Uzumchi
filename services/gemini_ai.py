@@ -12,17 +12,22 @@ import os
 import json
 from dataclasses import dataclass
 
+try:
+    from dotenv import load_dotenv
+    # Defense-in-depth: ensure .env is loaded even if this module is imported
+    # before main.py calls load_dotenv(). Idempotent — safe to call repeatedly.
+    load_dotenv()
+except Exception:  # pragma: no cover - dotenv always present in this project
+    pass
+
 logger = logging.getLogger(__name__)
 
-# ── Provider configuration (read from environment) ──────────────────────────
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-AI_PROVIDER = os.getenv("AI_PROVIDER", "").strip().lower()  # "", "groq", "openrouter", "gemini"
-
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+# NOTE: Provider env vars (GROQ_API_KEY / OPENROUTER_API_KEY / GEMINI_API_KEY /
+# AI_PROVIDER / *_MODEL) are read at CALL TIME inside `_all_providers()` and
+# `_select_providers()` — NOT captured into module-level constants here. Reading
+# at import time was the root cause of the "AI not configured" bug: `main.py`
+# calls `load_dotenv()` *after* importing the handlers that import this module,
+# so import-time reads saw an empty environment.
 
 # Permissive SSL (kept for Gemini host, as before, to reach it from restricted hosts).
 SSL_CONTEXT = ssl.create_default_context()
@@ -42,26 +47,34 @@ class ProviderConfig:
 def _all_providers() -> dict[str, ProviderConfig]:
     """Build the set of *configured* providers (those whose key is non-empty).
 
-    Env vars are read lazily here so tests can monkeypatch the module-level keys.
+    Env vars (keys AND models) are read lazily here via `os.getenv` at CALL TIME,
+    so values loaded by `load_dotenv()` after this module is imported are honored.
     """
+    groq_key = os.getenv("GROQ_API_KEY", "")
+    or_key = os.getenv("OPENROUTER_API_KEY", "")
+    gem_key = os.getenv("GEMINI_API_KEY", "")
+    groq_model = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+    or_model = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct")
+    gem_model = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+
     out: dict[str, ProviderConfig] = {}
-    if GROQ_API_KEY:
+    if groq_key:
         out["groq"] = ProviderConfig(
-            "groq", GROQ_API_KEY,
+            "groq", groq_key,
             "https://api.groq.com/openai/v1/chat/completions",
-            GROQ_MODEL, "openai",
+            groq_model, "openai",
         )
-    if OPENROUTER_API_KEY:
+    if or_key:
         out["openrouter"] = ProviderConfig(
-            "openrouter", OPENROUTER_API_KEY,
+            "openrouter", or_key,
             "https://openrouter.ai/api/v1/chat/completions",
-            OPENROUTER_MODEL, "openai",
+            or_model, "openai",
         )
-    if GEMINI_API_KEY:
+    if gem_key:
         out["gemini"] = ProviderConfig(
-            "gemini", GEMINI_API_KEY,
-            f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
-            GEMINI_MODEL, "gemini",
+            "gemini", gem_key,
+            f"https://generativelanguage.googleapis.com/v1beta/models/{gem_model}:generateContent",
+            gem_model, "gemini",
         )
     return out
 
@@ -70,13 +83,14 @@ def _select_providers() -> list[ProviderConfig]:
     """Ordered provider list: Groq -> OpenRouter -> Gemini, filtered to configured.
 
     When AI_PROVIDER names an available provider, return exactly that one.
-    Empty list when nothing is configured.
+    Empty list when nothing is configured. `AI_PROVIDER` is read at call time.
     """
     available = _all_providers()
     if not available:
         return []
-    if AI_PROVIDER and AI_PROVIDER in available:
-        return [available[AI_PROVIDER]]
+    provider = os.getenv("AI_PROVIDER", "").strip().lower()
+    if provider and provider in available:
+        return [available[provider]]
     order = ["groq", "openrouter", "gemini"]
     return [available[name] for name in order if name in available]
 

@@ -126,6 +126,22 @@ TEXTS = {
         "uz": "ℹ️ Uzum 60 kun bepul saqlaydi.",
         "ru": "ℹ️ Uzum хранит бесплатно 60 дней.",
     },
+    "storage_free_header": {
+        "uz": "⏳ <b>Bepul saqlash (60 kun):</b>",
+        "ru": "⏳ <b>Бесплатное хранение (60 дней):</b>",
+    },
+    "storage_free_summary": {
+        "uz": "📊 Eng kam qolgan: <b>{min_left}</b> kun | ⚠️ Xavf ostida: <b>{at_risk}</b> ta",
+        "ru": "📊 Мин. осталось: <b>{min_left}</b> дн. | ⚠️ Под риском: <b>{at_risk}</b>",
+    },
+    "storage_free_item": {
+        "uz": "{icon} #{invoice_number}: {free_days_left} kun qoldi ({qty} dona)",
+        "ru": "{icon} #{invoice_number}: осталось {free_days_left} дн. ({qty} шт.)",
+    },
+    "storage_free_unavailable": {
+        "uz": "ℹ️ Bepul saqlash ma'lumoti hozir mavjud emas.",
+        "ru": "ℹ️ Данные о бесплатном хранении сейчас недоступны.",
+    },
 
     # ── Reports ──────────────────────────────────────────────────────────────
     "report_today": {
@@ -247,6 +263,24 @@ TEXTS = {
     "competitor_not_found": {
         "uz": "❌ Raqiblar topilmadi.",
         "ru": "❌ Конкуренты не найдены.",
+    },
+    "competitor_blocked_note": {
+        "uz": (
+            "⚠️ Avtomatik narx olinmadi (Uzum cloud IP larni bloklaydi). "
+            "Aniq taqqoslash uchun UZ IP/proxy kerak."
+        ),
+        "ru": (
+            "⚠️ Автоцена недоступна (Uzum блокирует облачные IP). "
+            "Для точного сравнения нужен UZ IP/прокси."
+        ),
+    },
+    "competitor_manual_prompt": {
+        "uz": "✍️ Raqobatchi narxini qo'lda kiriting (faqat raqam, so'mda):",
+        "ru": "✍️ Введите цену конкурента вручную (только число, в сумах):",
+    },
+    "competitor_manual_invalid": {
+        "uz": "❌ Noto'g'ri qiymat. Faqat musbat raqam yuboring.",
+        "ru": "❌ Неверное значение. Отправьте только положительное число.",
     },
 
     # ── AI ────────────────────────────────────────────────────────────────────

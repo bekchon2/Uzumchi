@@ -1,21 +1,23 @@
 """
-Change 1 tests — main menu keyboard exclusivity/layout and analytics router integrity.
+Menu keyboard tests — Fix B: the daily Report button and its handler are removed.
 
-Property 1: Keyboard exclusivity
-Property 2: Keyboard layout validity
-Property 3: Analytics router integrity
-Validates: Requirements 1.1, 1.2, 1.3, 2.1, 2.3, 2.4, 2.5
+Property 2: Bug Condition — Daily Report Removed (6 buttons, no Report,
+            cmd_report_today absent).
+Property 3: Analytics router integrity (unchanged).
+Validates: Requirements 1.3, 1.4, 2.3, 2.4
 """
 import pytest
 
 from utils.keyboards import main_menu_keyboard
 from locales.i18n import t
 
+# Exactly six retained buttons after removing the daily Report.
 CORE_KEYS = [
-    "btn_products", "btn_orders", "btn_storage", "btn_report",
+    "btn_products", "btn_orders", "btn_storage",
     "btn_competitor", "btn_ai", "btn_settings",
 ]
-REMOVED_KEYS = ["btn_weekly", "btn_monthly", "btn_returns"]
+# Report (daily) joins weekly/monthly/returns as removed labels.
+REMOVED_KEYS = ["btn_report", "btn_weekly", "btn_monthly", "btn_returns"]
 
 
 def _button_texts(markup):
@@ -24,7 +26,7 @@ def _button_texts(markup):
 
 @pytest.mark.parametrize("lang", ["uz", "ru"])
 def test_main_menu_renders_exactly_core_buttons(lang):
-    """Property 1 — exactly the 7 Core_Menu_Buttons appear, in order."""
+    """Property 2 — exactly the 6 retained Core_Menu_Buttons appear, in order."""
     markup = main_menu_keyboard(lang)
     texts = _button_texts(markup)
     assert texts == [t(k, lang) for k in CORE_KEYS]
@@ -32,18 +34,26 @@ def test_main_menu_renders_exactly_core_buttons(lang):
 
 @pytest.mark.parametrize("lang", ["uz", "ru"])
 def test_main_menu_excludes_removed_buttons(lang):
-    """Property 1 — none of weekly/monthly/returns labels appear."""
+    """Property 2 — none of report/weekly/monthly/returns labels appear."""
     texts = set(_button_texts(main_menu_keyboard(lang)))
     for key in REMOVED_KEYS:
         assert t(key, lang) not in texts
 
 
 @pytest.mark.parametrize("lang", ["uz", "ru"])
-def test_main_menu_renders_seven_buttons(lang):
-    """Property 2 — layout rows sum to 7 buttons."""
+def test_main_menu_renders_six_buttons(lang):
+    """Property 2 — layout rows sum to 6 buttons."""
     markup = main_menu_keyboard(lang)
     total = sum(len(row) for row in markup.keyboard)
-    assert total == 7
+    assert total == 6
+
+
+def test_cmd_report_today_handler_absent():
+    """Property 2 — the daily Report handler no longer exists."""
+    import importlib
+    import handlers.main_menu as mm
+    importlib.reload(mm)
+    assert not hasattr(mm, "cmd_report_today")
 
 
 def test_analytics_imports_clean_and_ai_handlers_present():

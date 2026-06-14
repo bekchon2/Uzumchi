@@ -1,18 +1,20 @@
 """
-Integration-style tests driving the three report handlers with the Uzum API
-functions mocked, covering both the 403 fallback path and the orders-present
-preservation path.
+Integration-style tests driving `cmd_orders` with the Uzum API functions mocked.
 
-- All-403 orders ([]) + products available  -> fallback summary + note
-- Orders present                            -> full report + finance overlay, no note
-- Non-403 product failure ({} stats)        -> no fallback, existing zeroed report
+Fix B note: the daily Report handler (`cmd_report_today`) has been removed, so the
+three daily-report cases that previously lived here were deleted. The orders-present
+and 403-fallback *preservation* intent is retargeted onto `cmd_orders`, which carries
+its own INLINE product-based 403 fallback (it does NOT call `report_fallback`):
 
-Covers tasks 1 (exploration), 2.1/2.2 (preservation), 3.6/3.7 (verify), 4.5.
+- Orders present                              -> full order report + finance overlay
+- All-403 orders ([]) + product stats present -> inline product-stats fallback text
+- All-403 orders ([]) + empty stats ({})       -> existing zeroed order report
+
+Covers tasks 5 (preservation) and 6.4 (verify) for Fix B.
 """
 import asyncio
 
 import handlers.main_menu as mm
-from locales.i18n import t
 
 
 # ─── Test doubles ────────────────────────────────────────────────────────────
@@ -88,31 +90,11 @@ FINANCE = {
     ]
 }
 
-NOTE_UZ = t("report_fallback_note", "uz")
-SUMMARY_HEADER_UZ = "Mahsulot asosidagi taxminiy hisobot"
 
+# ─── cmd_orders preservation ─────────────────────────────────────────────────
 
-# ─── Daily report (cmd_report_today) ─────────────────────────────────────────
-
-def test_daily_fallback_on_403_orders(monkeypatch):
-    monkeypatch.setattr(mm, "get_user", _aret(USER))
-    monkeypatch.setattr(mm, "get_fbs_orders", _aret([]))           # all-403 -> []
-    monkeypatch.setattr(mm, "get_products", _aret(PRODUCTS))
-    monkeypatch.setattr(mm, "get_sales_stats_from_products", _aret(STATS))
-    monkeypatch.setattr(mm, "get_finance_orders", _aret({}))
-
-    store = {}
-    _run(mm.cmd_report_today(FakeMessage(store)))
-    text = store["rendered"]
-
-    assert SUMMARY_HEADER_UZ in text
-    assert "120" in text                 # approximate sold
-    assert "4,500,000" in text           # estimated revenue
-    assert NOTE_UZ in text               # localized permission note
-    assert "Jami: 0" not in text         # no authoritative zeroed order totals
-
-
-def test_daily_orders_present_unchanged(monkeypatch):
+def test_orders_present_full_report_with_finance(monkeypatch):
+    """Orders present -> full order summary + finance overlay (unchanged)."""
     monkeypatch.setattr(mm, "get_user", _aret(USER))
     monkeypatch.setattr(mm, "get_fbs_orders", _aret(ORDERS))
     monkeypatch.setattr(mm, "get_products", _aret(PRODUCTS))
@@ -120,25 +102,40 @@ def test_daily_orders_present_unchanged(monkeypatch):
     monkeypatch.setattr(mm, "get_finance_orders", _aret(FINANCE))
 
     store = {}
-    _run(mm.cmd_report_today(FakeMessage(store)))
+    _run(mm.cmd_orders(FakeMessage(store)))
     text = store["rendered"]
 
-    assert "Jami: 1" in text                       # full order-based report
-    assert "Komissiya" in text                     # finance overlay present
-    assert NOTE_UZ not in text                      # no fallback note injected
-    assert SUMMARY_HEADER_UZ not in text
+    assert "Jami: <b>1</b>" in text          # order-based summary
+    assert "Komissiya" in text               # finance overlay present
 
 
-def test_daily_non_403_product_failure_no_fallback(monkeypatch):
+def test_orders_403_inline_product_fallback(monkeypatch):
+    """All-403 orders ([]) but product stats available -> inline product fallback."""
     monkeypatch.setattr(mm, "get_user", _aret(USER))
     monkeypatch.setattr(mm, "get_fbs_orders", _aret([]))
     monkeypatch.setattr(mm, "get_products", _aret(PRODUCTS))
-    monkeypatch.setattr(mm, "get_sales_stats_from_products", _aret({}))  # {} => unavailable
+    monkeypatch.setattr(mm, "get_sales_stats_from_products", _aret(STATS))
     monkeypatch.setattr(mm, "get_finance_orders", _aret({}))
 
     store = {}
-    _run(mm.cmd_report_today(FakeMessage(store)))
+    _run(mm.cmd_orders(FakeMessage(store)))
     text = store["rendered"]
 
-    assert NOTE_UZ not in text
-    assert "Jami: 0" in text             # existing zeroed report preserved
+    assert "120" in text                     # approximate sold qty from products
+    assert "API ruxsati yo'q" in text        # inline permission note (uz)
+
+
+def test_orders_403_empty_stats_zeroed_report(monkeypatch):
+    """All-403 orders ([]) and empty stats ({}) -> existing zeroed order report."""
+    monkeypatch.setattr(mm, "get_user", _aret(USER))
+    monkeypatch.setattr(mm, "get_fbs_orders", _aret([]))
+    monkeypatch.setattr(mm, "get_products", _aret(PRODUCTS))
+    monkeypatch.setattr(mm, "get_sales_stats_from_products", _aret({}))
+    monkeypatch.setattr(mm, "get_finance_orders", _aret({}))
+
+    store = {}
+    _run(mm.cmd_orders(FakeMessage(store)))
+    text = store["rendered"]
+
+    assert "Jami: <b>0</b>" in text          # zeroed order summary preserved
+    assert "API ruxsati yo'q" not in text    # inline fallback NOT triggered

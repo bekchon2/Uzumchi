@@ -5,6 +5,7 @@ Bot tovar nomini HTML dan avtomatik oladi, narxni API dan oladi.
 """
 import asyncio
 import logging
+import os
 import ssl
 import re
 import json
@@ -134,12 +135,15 @@ def get_price_from_html(html: str) -> tuple[float, float] | None:
 
 async def _fetch_product_html(url: str) -> str | None:
     """Single GET of the product page; returns HTML text or None on error/non-200."""
+    proxy = os.getenv("UZUM_PROXY", "") or None
     try:
         async with aiohttp.ClientSession(
             connector=aiohttp.TCPConnector(ssl=SSL_CONTEXT),
             headers=HTML_HEADERS,
         ) as session:
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+            async with session.get(
+                url, timeout=aiohttp.ClientTimeout(total=15), proxy=proxy
+            ) as resp:
                 if resp.status != 200:
                     logger.warning(f"[COMP] HTML {url} → {resp.status}")
                     return None
@@ -191,6 +195,7 @@ async def get_product_title_from_html(url: str) -> str | None:
 
 async def _get_product_from_api(product_id: str) -> dict | None:
     """API dan tovar ma'lumotlarini olish."""
+    proxy = os.getenv("UZUM_PROXY", "") or None
     api_endpoints = [
         f"https://api.uzum.uz/api/product/{product_id}",
         f"https://api.uzum.uz/api/v2/product/{product_id}",
@@ -203,7 +208,9 @@ async def _get_product_from_api(product_id: str) -> dict | None:
         for api_url in api_endpoints:
             try:
                 await asyncio.sleep(0.5)
-                async with session.get(api_url, timeout=aiohttp.ClientTimeout(total=12)) as resp:
+                async with session.get(
+                    api_url, timeout=aiohttp.ClientTimeout(total=12), proxy=proxy
+                ) as resp:
                     logger.info(f"[COMP] {api_url} → {resp.status}")
                     if resp.status != 200:
                         continue
