@@ -19,19 +19,17 @@ def lang_keyboard() -> InlineKeyboardMarkup:
 
 
 def main_menu_keyboard(lang: str = "ru") -> ReplyKeyboardMarkup:
-    """Asosiy menyu tugmalari."""
+    """Asosiy menyu tugmalari (7 ta)."""
     builder = ReplyKeyboardBuilder()
     builder.button(text=t("btn_products", lang))
     builder.button(text=t("btn_orders", lang))
     builder.button(text=t("btn_storage", lang))
     builder.button(text=t("btn_report", lang))
-    builder.button(text=t("btn_weekly", lang))
-    builder.button(text=t("btn_monthly", lang))
-    builder.button(text=t("btn_returns", lang))
     builder.button(text=t("btn_competitor", lang))
     builder.button(text=t("btn_ai", lang))
     builder.button(text=t("btn_settings", lang))
-    builder.adjust(2, 2, 2, 2, 1, 1)
+    # 7 buttons: three rows of two + a final single
+    builder.adjust(2, 2, 2, 1)
     return builder.as_markup(resize_keyboard=True)
 
 

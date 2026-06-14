@@ -78,47 +78,115 @@ def _extract_prices(payload: dict) -> list[float]:
     return list(set(prices))
 
 
-async def get_product_title_from_html(url: str) -> str | None:
-    """Uzum tovar sahifasi HTML dan tovar nomini olish."""
+def _accumulate_price(value, prices: list[float]) -> None:
+    """Coerce `value` to float and append it only when it exceeds the threshold (>100)."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return
+    if v > 100:
+        prices.append(v)
+
+
+def get_price_from_html(html: str) -> tuple[float, float] | None:
+    """
+    Extract (min_price, max_price) from a Uzum product page's HTML.
+
+    Sources:
+      1) JSON-LD <script type="application/ld+json"> offers: price / lowPrice / highPrice
+      2) Embedded state JSON keys: sellPrice / purchasePrice / minSellPrice / price / fullPrice
+
+    Returns None when no plausible price (> 100) is found.
+    """
+    if not html:
+        return None
+
+    prices: list[float] = []
+
+    # 1) JSON-LD offers
+    for block in re.findall(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        html, re.DOTALL | re.IGNORECASE,
+    ):
+        try:
+            data = json.loads(block.strip())
+        except Exception:
+            continue
+        for node in (data if isinstance(data, list) else [data]):
+            offers = node.get("offers") if isinstance(node, dict) else None
+            if offers is None:
+                continue
+            for off in (offers if isinstance(offers, list) else [offers]):
+                if not isinstance(off, dict):
+                    continue
+                for key in ("price", "lowPrice", "highPrice"):
+                    _accumulate_price(off.get(key), prices)
+
+    # 2) Embedded state JSON keys (regex over raw HTML — robust to bundling)
+    for key in ("sellPrice", "purchasePrice", "minSellPrice", "price", "fullPrice"):
+        for m in re.findall(rf'"{key}"\s*:\s*"?(\d[\d.]*)"?', html):
+            _accumulate_price(m, prices)
+
+    if not prices:
+        return None
+    return (min(prices), max(prices))
+
+
+async def _fetch_product_html(url: str) -> str | None:
+    """Single GET of the product page; returns HTML text or None on error/non-200."""
     try:
         async with aiohttp.ClientSession(
             connector=aiohttp.TCPConnector(ssl=SSL_CONTEXT),
-            headers=HTML_HEADERS
+            headers=HTML_HEADERS,
         ) as session:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=15)) as resp:
                 if resp.status != 200:
                     logger.warning(f"[COMP] HTML {url} → {resp.status}")
                     return None
-                html = await resp.text()
-
-                # 1. og:title meta tag
-                match = re.search(
-                    r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
-                    html, re.IGNORECASE
-                )
-                if match:
-                    title = match.group(1).strip()
-                    logger.info(f"[COMP] og:title: {title[:50]}")
-                    return title
-
-                # 2. <title> tegi
-                match = re.search(r'<title>([^<]+)</title>', html, re.IGNORECASE)
-                if match:
-                    title = match.group(1).strip()
-                    title = re.sub(r'\s*[|–-]\s*Uzum.*$', '', title, flags=re.IGNORECASE).strip()
-                    if title and len(title) > 5:
-                        logger.info(f"[COMP] title tag: {title[:50]}")
-                        return title
-
-                # 3. JSON-LD name
-                match = re.search(r'"name"\s*:\s*"([^"]{5,})"', html)
-                if match:
-                    title = match.group(1).strip()
-                    logger.info(f"[COMP] JSON-LD name: {title[:50]}")
-                    return title
+                return await resp.text()
     except Exception as e:
         logger.warning(f"[COMP] HTML fetch error: {e}")
+        return None
+
+
+def _title_from_html(html: str) -> str | None:
+    """Pure title parse: og:title → <title> → JSON-LD name."""
+    if not html:
+        return None
+
+    # 1. og:title meta tag
+    match = re.search(
+        r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\']([^"\']+)["\']',
+        html, re.IGNORECASE
+    )
+    if match:
+        title = match.group(1).strip()
+        logger.info(f"[COMP] og:title: {title[:50]}")
+        return title
+
+    # 2. <title> tegi
+    match = re.search(r'<title>([^<]+)</title>', html, re.IGNORECASE)
+    if match:
+        title = match.group(1).strip()
+        title = re.sub(r'\s*[|–-]\s*Uzum.*$', '', title, flags=re.IGNORECASE).strip()
+        if title and len(title) > 5:
+            logger.info(f"[COMP] title tag: {title[:50]}")
+            return title
+
+    # 3. JSON-LD name
+    match = re.search(r'"name"\s*:\s*"([^"]{5,})"', html)
+    if match:
+        title = match.group(1).strip()
+        logger.info(f"[COMP] JSON-LD name: {title[:50]}")
+        return title
+
     return None
+
+
+async def get_product_title_from_html(url: str) -> str | None:
+    """Uzum tovar sahifasi HTML dan tovar nomini olish (thin wrapper)."""
+    html = await _fetch_product_html(url)
+    return _title_from_html(html) if html else None
 
 
 async def _get_product_from_api(product_id: str) -> dict | None:
@@ -189,8 +257,10 @@ async def _get_product_from_api(product_id: str) -> dict | None:
 async def get_product_info_by_url(uzum_url: str) -> dict | None:
     """
     Uzum tovar URL dan ma'lumot olish:
-    1. HTML sahifadan nom
-    2. API dan narx
+    1. HTML sahifadan nom va narx (bir marta GET)
+    2. API dan narx (mavjud bo'lsa ustun)
+
+    price_source: "api" | "html" | "none". Hech qachon handlerga xato ko'tarmaydi.
     """
     product_id = extract_product_id_from_url(uzum_url)
     if not product_id:
@@ -199,24 +269,51 @@ async def get_product_info_by_url(uzum_url: str) -> dict | None:
 
     logger.info(f"[COMP] Product ID: {product_id}")
 
-    title_from_html = await get_product_title_from_html(uzum_url)
+    # Fetch the product-page HTML once; derive both title and price from it.
+    html = await _fetch_product_html(uzum_url)
+    title_from_html = _title_from_html(html) if html else None
+    html_prices = get_price_from_html(html) if html else None
+
     api_data = await _get_product_from_api(product_id)
 
     if api_data:
         if title_from_html and (not api_data.get("title") or api_data.get("title") == "—"):
             api_data["title"] = title_from_html
+        api_min = api_data.get("min_price") or 0
+        if api_min > 0:
+            # API gave a usable price -> keep it, do not overwrite with HTML.
+            api_data["price_source"] = "api"
+            api_data.setdefault("html_only", False)
+        elif html_prices:
+            # API price missing -> fall back to HTML price.
+            lo, hi = html_prices
+            api_data.update(
+                min_price=lo, max_price=hi, price=(lo + hi) / 2,
+                price_source="html", html_only=False,
+            )
+        else:
+            api_data["price_source"] = "none"
+            api_data["html_only"] = True
+            api_data.setdefault("min_price", 0)
+            api_data.setdefault("max_price", 0)
         api_data["url"] = uzum_url
         return api_data
 
-    # API ishlamadi, faqat HTML nom bor
-    if title_from_html:
-        logger.info(f"[COMP] Faqat HTML nom: {title_from_html[:40]}")
+    # API failed entirely -> HTML primary (title and/or price).
+    if title_from_html or html_prices:
+        lo, hi = html_prices if html_prices else (0.0, 0.0)
         return {
-            "title": title_from_html[:60],
-            "price": 0, "min_price": 0, "max_price": 0,
-            "shop": "—", "rating": 0, "reviews": 0,
-            "product_id": product_id, "url": uzum_url,
-            "html_only": True,
+            "title": (title_from_html or "Tovar")[:60],
+            "price": (lo + hi) / 2,
+            "min_price": lo,
+            "max_price": hi,
+            "shop": "—",
+            "rating": 0,
+            "reviews": 0,
+            "product_id": product_id,
+            "url": uzum_url,
+            "price_source": "html" if html_prices else "none",
+            "html_only": html_prices is None,
         }
 
     return None

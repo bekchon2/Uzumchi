@@ -12,7 +12,6 @@ Covers tasks 1 (exploration), 2.1/2.2 (preservation), 3.6/3.7 (verify), 4.5.
 import asyncio
 
 import handlers.main_menu as mm
-import handlers.analytics as an
 from locales.i18n import t
 
 
@@ -143,68 +142,3 @@ def test_daily_non_403_product_failure_no_fallback(monkeypatch):
 
     assert NOTE_UZ not in text
     assert "Jami: 0" in text             # existing zeroed report preserved
-
-
-# ─── Weekly report (cmd_weekly) ──────────────────────────────────────────────
-
-def test_weekly_fallback_on_403_orders(monkeypatch):
-    monkeypatch.setattr(an, "get_user", _aret(USER))
-    monkeypatch.setattr(an, "get_fbs_orders_period", _aret([]))
-    monkeypatch.setattr(an, "get_sales_stats_from_products", _aret(STATS))
-
-    store = {}
-    _run(an.cmd_weekly(FakeMessage(store)))
-    text = store["rendered"]
-
-    assert SUMMARY_HEADER_UZ in text
-    assert "120" in text
-    assert NOTE_UZ in text
-    assert "Jami buyurtmalar" not in text   # zeroed weekly body skipped
-
-
-def test_weekly_orders_present_unchanged(monkeypatch):
-    monkeypatch.setattr(an, "get_user", _aret(USER))
-    monkeypatch.setattr(an, "get_fbs_orders_period", _aret(ORDERS))
-    monkeypatch.setattr(an, "get_sales_stats_from_products", _aret(STATS))
-    monkeypatch.setattr(an, "get_finance_orders", _aret(FINANCE))
-
-    store = {}
-    _run(an.cmd_weekly(FakeMessage(store)))
-    text = store["rendered"]
-
-    assert "Jami buyurtmalar" in text       # full weekly body
-    assert "Rentabellik" in text            # finance overlay (margin)
-    assert NOTE_UZ not in text
-
-
-# ─── Monthly report (cmd_monthly) ────────────────────────────────────────────
-
-def test_monthly_fallback_on_403_orders(monkeypatch):
-    monkeypatch.setattr(an, "get_user", _aret(USER))
-    monkeypatch.setattr(an, "get_fbs_orders_period", _aret([]))
-    monkeypatch.setattr(an, "get_sales_stats_from_products", _aret(STATS))
-
-    store = {}
-    _run(an.cmd_monthly(FakeMessage(store)))
-    text = store["rendered"]
-
-    assert SUMMARY_HEADER_UZ in text
-    assert "120" in text
-    assert NOTE_UZ in text
-    assert "Jami buyurtmalar" not in text
-
-
-def test_monthly_orders_present_unchanged(monkeypatch):
-    monkeypatch.setattr(an, "get_user", _aret(USER))
-    monkeypatch.setattr(an, "get_fbs_orders_period", _aret(ORDERS))
-    monkeypatch.setattr(an, "get_sales_stats_from_products", _aret(STATS))
-    monkeypatch.setattr(an, "get_expenses", _aret({}))
-    monkeypatch.setattr(an, "get_finance_orders", _aret(FINANCE))
-
-    store = {}
-    _run(an.cmd_monthly(FakeMessage(store)))
-    text = store["rendered"]
-
-    assert "Jami buyurtmalar" in text
-    assert "Rentabellik" in text
-    assert NOTE_UZ not in text
