@@ -1,99 +1,180 @@
 """
-Gemini AI maslahatchi servisi.
-Google Gemini API orqali savdo tahlili va tavsiyalar beradi.
+AI maslahatchi servisi (provider-agnostic).
+
+Bir nechta provayderni qo'llab-quvvatlaydi: Groq -> OpenRouter -> Gemini.
+Ommaviy kirish nuqtasi `ask_gemini(prompt, lang)` nomi saqlangan, shuning uchun
+handlerlar o'zgartirilishi shart emas.
 """
-import asyncio
 import logging
 import ssl
 import aiohttp
 import os
 import json
+from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
+# ── Provider configuration (read from environment) ──────────────────────────
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"
-GEMINI_URL_PRO = "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent"
+AI_PROVIDER = os.getenv("AI_PROVIDER", "").strip().lower()  # "", "groq", "openrouter", "gemini"
 
-# Windows SSL muammosini hal qilish
+GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
+OPENROUTER_MODEL = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+
+# Permissive SSL (kept for Gemini host, as before, to reach it from restricted hosts).
 SSL_CONTEXT = ssl.create_default_context()
 SSL_CONTEXT.check_hostname = False
 SSL_CONTEXT.verify_mode = ssl.CERT_NONE
 
 
+@dataclass(frozen=True)
+class ProviderConfig:
+    name: str            # "groq" | "openrouter" | "gemini"
+    api_key: str
+    endpoint: str
+    model: str
+    kind: str            # "openai" | "gemini"
+
+
+def _all_providers() -> dict[str, ProviderConfig]:
+    """Build the set of *configured* providers (those whose key is non-empty).
+
+    Env vars are read lazily here so tests can monkeypatch the module-level keys.
+    """
+    out: dict[str, ProviderConfig] = {}
+    if GROQ_API_KEY:
+        out["groq"] = ProviderConfig(
+            "groq", GROQ_API_KEY,
+            "https://api.groq.com/openai/v1/chat/completions",
+            GROQ_MODEL, "openai",
+        )
+    if OPENROUTER_API_KEY:
+        out["openrouter"] = ProviderConfig(
+            "openrouter", OPENROUTER_API_KEY,
+            "https://openrouter.ai/api/v1/chat/completions",
+            OPENROUTER_MODEL, "openai",
+        )
+    if GEMINI_API_KEY:
+        out["gemini"] = ProviderConfig(
+            "gemini", GEMINI_API_KEY,
+            f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent",
+            GEMINI_MODEL, "gemini",
+        )
+    return out
+
+
+def _select_providers() -> list[ProviderConfig]:
+    """Ordered provider list: Groq -> OpenRouter -> Gemini, filtered to configured.
+
+    When AI_PROVIDER names an available provider, return exactly that one.
+    Empty list when nothing is configured.
+    """
+    available = _all_providers()
+    if not available:
+        return []
+    if AI_PROVIDER and AI_PROVIDER in available:
+        return [available[AI_PROVIDER]]
+    order = ["groq", "openrouter", "gemini"]
+    return [available[name] for name in order if name in available]
+
+
+async def _call_openai_compatible(cfg: ProviderConfig, prompt: str) -> str:
+    """Groq + OpenRouter share the OpenAI chat-completions schema (default TLS)."""
+    headers = {
+        "Authorization": f"Bearer {cfg.api_key}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": cfg.model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.7,
+        "max_tokens": 1024,
+    }
+    async with aiohttp.ClientSession() as session:  # default TLS for these hosts
+        async with session.post(
+            cfg.endpoint, headers=headers, json=payload,
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as resp:
+            body = await resp.text()
+            if resp.status != 200:
+                # Log status + body (first ~300 chars); never log the API key.
+                logger.error(f"{cfg.name} {resp.status}: {body[:300]}")
+                raise RuntimeError(f"{cfg.name} HTTP {resp.status}")
+            data = json.loads(body)
+            return (data["choices"][0]["message"]["content"] or "").strip()
+
+
+async def _call_gemini(cfg: ProviderConfig, prompt: str) -> str:
+    """Google Gemini generateContent (v1beta); key as query param, permissive SSL."""
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": 0.7, "maxOutputTokens": 1024},
+    }
+    async with aiohttp.ClientSession(
+        connector=aiohttp.TCPConnector(ssl=SSL_CONTEXT)
+    ) as session:
+        async with session.post(
+            cfg.endpoint, params={"key": cfg.api_key}, json=payload,
+            timeout=aiohttp.ClientTimeout(total=30),
+        ) as resp:
+            body = await resp.text()
+            if resp.status != 200:
+                # Log status + body (first ~300 chars); never log the API key.
+                logger.error(f"gemini {resp.status}: {body[:300]}")
+                raise RuntimeError(f"gemini HTTP {resp.status}")
+            data = json.loads(body)
+            cands = data.get("candidates", [])
+            if cands:
+                parts = cands[0].get("content", {}).get("parts", [])
+                if parts:
+                    return (parts[0].get("text", "") or "").strip()
+            return ""
+
+
 async def ask_gemini(prompt: str, lang: str = "ru") -> str:
     """
-    Gemini API ga so'rov yuborish.
-    Returns: javob matni yoki xato xabari.
-    """
-    if not GEMINI_API_KEY:
-        if lang == "uz":
-            return "⚠️ Gemini API kaliti sozlanmagan. GEMINI_API_KEY ni .env ga qo'shing."
-        return "⚠️ Ключ Gemini API не настроен. Добавьте GEMINI_API_KEY в .env."
+    Provider-agnostic completion. Name kept for call-site compatibility.
 
-    # Kalit formatini tekshirish
-    if not GEMINI_API_KEY.startswith("AIzaSy"):
-        logger.warning(f"Gemini kalit formati noto'g'ri: {GEMINI_API_KEY[:10]}...")
+    No API-key format check: any non-empty provider key is usable.
+    Returns the first non-empty answer; falls back across providers; returns a
+    localized message when no provider is configured or all providers fail.
+    """
+    providers = _select_providers()
+    if not providers:
+        # No network call when nothing is configured.
         if lang == "uz":
             return (
-                "⚠️ Gemini API kaliti noto'g'ri format.\n\n"
-                "To'g'ri kalit: AIzaSy... bilan boshlanadi\n"
-                "📌 https://aistudio.google.com/app/apikey dan oling"
+                "⚠️ AI sozlanmagan. .env ga GROQ_API_KEY (yoki OPENROUTER_API_KEY / "
+                "GEMINI_API_KEY) qo'shing."
             )
         return (
-            "⚠️ Неверный формат ключа Gemini API.\n\n"
-            "Правильный ключ начинается с: AIzaSy...\n"
-            "📌 Получите на https://aistudio.google.com/app/apikey"
+            "⚠️ AI не настроен. Добавьте GROQ_API_KEY (или OPENROUTER_API_KEY / "
+            "GEMINI_API_KEY) в .env."
         )
 
-    payload = {
-        "contents": [
-            {
-                "parts": [{"text": prompt}]
-            }
-        ],
-        "generationConfig": {
-            "temperature": 0.7,
-            "maxOutputTokens": 1024,
-        }
-    }
+    last_error = ""
+    for cfg in providers:
+        try:
+            if cfg.kind == "openai":
+                text = await _call_openai_compatible(cfg, prompt)
+            else:
+                text = await _call_gemini(cfg, prompt)
+            if text:
+                return text
+            last_error = f"{cfg.name}: empty response"
+            logger.warning(f"AI provider {cfg.name} returned empty response")
+        except Exception as e:
+            last_error = f"{cfg.name}: {e}"
+            logger.error(f"AI provider {cfg.name} failed: {e}")
+            continue  # try next configured provider
 
-    try:
-        async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=SSL_CONTEXT)) as session:
-            async with session.post(
-                GEMINI_URL,
-                params={"key": GEMINI_API_KEY},
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=30),
-            ) as resp:
-                if resp.status == 200:
-                    data = await resp.json()
-                    candidates = data.get("candidates", [])
-                    if candidates:
-                        content = candidates[0].get("content", {})
-                        parts = content.get("parts", [])
-                        if parts:
-                            return parts[0].get("text", "").strip()
-                    return "⚠️ Bo'sh javob olindi." if lang == "uz" else "⚠️ Получен пустой ответ."
-                elif resp.status == 429:
-                    if lang == "uz":
-                        return "⚠️ Gemini API cheklovi. Bir ozdan keyin urinib ko'ring."
-                    return "⚠️ Лимит Gemini API. Попробуйте чуть позже."
-                else:
-                    text = await resp.text()
-                    logger.error(f"Gemini API error {resp.status}: {text[:200]}")
-                    if lang == "uz":
-                        return f"⚠️ Gemini xatosi: {resp.status}"
-                    return f"⚠️ Ошибка Gemini: {resp.status}"
-    except asyncio.TimeoutError:
-        if lang == "uz":
-            return "⚠️ Gemini javob bermadi (timeout). Qayta urinib ko'ring."
-        return "⚠️ Gemini не ответил (timeout). Попробуйте снова."
-    except Exception as e:
-        logger.error(f"Gemini request error: {e}")
-        if lang == "uz":
-            return f"⚠️ Xato: {e}"
-        return f"⚠️ Ошибка: {e}"
+    logger.error(f"All AI providers failed. Last: {last_error}")
+    if lang == "uz":
+        return "⚠️ AI javob bermadi. Keyinroq urinib ko'ring."
+    return "⚠️ AI не ответил. Попробуйте позже."
 
 
 def build_sales_analysis_prompt(stats: dict, products: list[dict], lang: str = "ru") -> str:
