@@ -336,7 +336,8 @@ async def get_sales_stats_from_products(api_key: str, shop_id: int) -> dict:
 
                 total_sold += sold
                 total_returned += returned
-                total_revenue += sold * price
+                net_sold = max(0, sold - returned)
+                total_revenue += net_sold * price
 
                 if qty == 0:
                     out_count += 1

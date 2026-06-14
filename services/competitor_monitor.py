@@ -133,6 +133,120 @@ def get_price_from_html(html: str) -> tuple[float, float] | None:
     return (min(prices), max(prices))
 
 
+def _coerce_name(value) -> str:
+    """Return a stripped name string for str/scalar values, else ''."""
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, (int, float)):
+        return str(value).strip()
+    return ""
+
+
+def _extract_shop_name(payload: dict) -> str:
+    """
+    Robustly extract the competitor shop/seller name from an API payload.
+
+    Checks many candidate fields in priority order and returns the first
+    non-empty, stripped string; returns "" when none is found. Nested-dict
+    lookups are guarded, and a parent that is itself a non-empty string
+    (bare ``shop``/``seller`` string) is treated as the name.
+    """
+    if not isinstance(payload, dict):
+        return ""
+
+    # (parent, child) for nested lookups; (key,) for top-level lookups.
+    specs = [
+        ("seller", "title"),
+        ("seller", "name"),
+        ("seller", "shopName"),
+        ("seller", "companyName"),
+        ("shopTitle",),
+        ("shopName",),
+        ("shopInfo", "title"),
+        ("shopInfo", "name"),
+        ("sellerName",),
+        ("shop", "title"),
+        ("shop", "name"),
+        ("shop", "shopName"),
+        ("sellerTitle",),
+        ("companyName",),
+    ]
+    for spec in specs:
+        if len(spec) == 1:
+            name = _coerce_name(payload.get(spec[0]))
+        else:
+            parent = payload.get(spec[0])
+            if isinstance(parent, dict):
+                name = _coerce_name(parent.get(spec[1]))
+            else:
+                # Bare-string parent, e.g. payload["seller"] == "ACME".
+                name = parent.strip() if isinstance(parent, str) else ""
+        if name:
+            return name
+    return ""
+
+
+def get_shop_from_html(html: str) -> str | None:
+    """
+    Parse the competitor shop/seller name from product-page HTML.
+
+    Sources, in priority order:
+      1) Embedded JSON keys: "sellerTitle" / "shopTitle" / "sellerName"
+      2) A "seller": { ... "title"/"name": ... } object
+      3) A "shopInfo": { ... "title"/"name": ... } object
+      4) JSON-LD <script type="application/ld+json"> brand/seller name
+
+    Returns the first non-empty match, else None.
+    """
+    if not html:
+        return None
+
+    # 1) Embedded JSON simple keys.
+    for key in ("sellerTitle", "shopTitle", "sellerName"):
+        m = re.search(rf'"{key}"\s*:\s*"([^"]+)"', html)
+        if m:
+            name = m.group(1).strip()
+            if name:
+                return name
+
+    # 2/3) "seller" / "shopInfo" objects -> title then name.
+    for parent in ("seller", "shopInfo"):
+        obj = re.search(rf'"{parent}"\s*:\s*\{{(.*?)\}}', html, re.DOTALL)
+        if obj:
+            block = obj.group(1)
+            for sub in ("title", "name"):
+                m = re.search(rf'"{sub}"\s*:\s*"([^"]+)"', block)
+                if m:
+                    name = m.group(1).strip()
+                    if name:
+                        return name
+
+    # 4) JSON-LD brand/seller (mirrors get_price_from_html's scanning style).
+    for block in re.findall(
+        r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>',
+        html, re.DOTALL | re.IGNORECASE,
+    ):
+        try:
+            data = json.loads(block.strip())
+        except Exception:
+            continue
+        for node in (data if isinstance(data, list) else [data]):
+            if not isinstance(node, dict):
+                continue
+            for field in ("brand", "seller"):
+                val = node.get(field)
+                if isinstance(val, dict):
+                    name = (val.get("name") or val.get("title") or "").strip()
+                    if name:
+                        return name
+                elif isinstance(val, str) and val.strip():
+                    return val.strip()
+
+    return None
+
+
 async def _fetch_product_html(url: str) -> str | None:
     """Single GET of the product page; returns HTML text or None on error/non-200."""
     proxy = os.getenv("UZUM_PROXY", "") or None
@@ -235,11 +349,7 @@ async def _get_product_from_api(product_id: str) -> dict | None:
                     min_p, max_p = min(prices), max(prices)
                     title = (payload.get("title") or payload.get("name")
                              or payload.get("productName") or "—")
-                    shop = payload.get("shop") or payload.get("seller") or {}
-                    shop_name = (
-                        shop.get("name") or shop.get("shopName")
-                        if isinstance(shop, dict) else str(shop)
-                    ) or "—"
+                    shop_name = _extract_shop_name(payload) or "—"
                     rating = float(payload.get("rating") or payload.get("avgRating") or 0)
                     reviews = int(payload.get("reviewCount") or payload.get("totalReviews") or 0)
 
@@ -303,6 +413,11 @@ async def get_product_info_by_url(uzum_url: str) -> dict | None:
             api_data["html_only"] = True
             api_data.setdefault("min_price", 0)
             api_data.setdefault("max_price", 0)
+        # Resolve the shop name from HTML when the API value is empty/"—".
+        api_shop = api_data.get("shop")
+        if not api_shop or api_shop == "—":
+            shop_from_html = get_shop_from_html(html) if html else None
+            api_data["shop"] = shop_from_html or "—"
         api_data["url"] = uzum_url
         return api_data
 
@@ -314,7 +429,7 @@ async def get_product_info_by_url(uzum_url: str) -> dict | None:
             "price": (lo + hi) / 2,
             "min_price": lo,
             "max_price": hi,
-            "shop": "—",
+            "shop": (get_shop_from_html(html) if html else None) or "—",
             "rating": 0,
             "reviews": 0,
             "product_id": product_id,
