@@ -126,6 +126,22 @@ TEXTS = {
         "uz": "ℹ️ Uzum 60 kun bepul saqlaydi.",
         "ru": "ℹ️ Uzum хранит бесплатно 60 дней.",
     },
+    "storage_free_header": {
+        "uz": "⏳ <b>Bepul saqlash (60 kun):</b>",
+        "ru": "⏳ <b>Бесплатное хранение (60 дней):</b>",
+    },
+    "storage_free_summary": {
+        "uz": "📊 Eng kam qolgan: <b>{min_left}</b> kun | ⚠️ Xavf ostida: <b>{at_risk}</b> ta",
+        "ru": "📊 Мин. осталось: <b>{min_left}</b> дн. | ⚠️ Под риском: <b>{at_risk}</b>",
+    },
+    "storage_free_item": {
+        "uz": "{icon} #{invoice_number}: {free_days_left} kun qoldi ({qty} dona)",
+        "ru": "{icon} #{invoice_number}: осталось {free_days_left} дн. ({qty} шт.)",
+    },
+    "storage_free_unavailable": {
+        "uz": "ℹ️ Bepul saqlash ma'lumoti hozir mavjud emas.",
+        "ru": "ℹ️ Данные о бесплатном хранении сейчас недоступны.",
+    },
 
     # ── Reports ──────────────────────────────────────────────────────────────
     "report_today": {
@@ -147,6 +163,36 @@ TEXTS = {
     "out_of_stock_header": {
         "uz": "🚫 <b>Tugagan tovarlar:</b>",
         "ru": "🚫 <b>Закончившиеся товары:</b>",
+    },
+
+    # ── Report 403 product-based fallback (shared: daily / weekly / monthly) ──
+    "report_fallback_summary": {
+        "uz": (
+            "📊 <b>Mahsulot asosidagi taxminiy hisobot</b>\n"
+            "📦 Jami sotilgan: <b>{total_sold}</b> dona\n"
+            "↩️ Qaytarilgan: <b>{total_returned}</b> dona\n"
+            "💰 Taxminiy tushum: <b>{total_revenue:,.0f} so'm</b>\n"
+            "🗂 Tovar turlari: <b>{products_count}</b> ta\n"
+            "⚠️ Kam qolgan: <b>{low_stock_count}</b> | 🚫 Tugagan: <b>{out_count}</b>"
+        ),
+        "ru": (
+            "📊 <b>Приблизительный отчёт по товарам</b>\n"
+            "📦 Всего продано: <b>{total_sold}</b> шт.\n"
+            "↩️ Возвращено: <b>{total_returned}</b> шт.\n"
+            "💰 Ориентировочная выручка: <b>{total_revenue:,.0f} сум</b>\n"
+            "🗂 Видов товаров: <b>{products_count}</b> шт.\n"
+            "⚠️ Мало: <b>{low_stock_count}</b> | 🚫 Закончились: <b>{out_count}</b>"
+        ),
+    },
+    "report_fallback_note": {
+        "uz": (
+            "⚠️ <i>Buyurtma/moliya ma'lumotlari uchun API kalitga ruxsat berilmagan — "
+            "ko'rsatilgan raqamlar tovar ma'lumotlaridan olingan taxminiy qiymatlar.</i>"
+        ),
+        "ru": (
+            "⚠️ <i>Доступ к данным заказов/финансов для API-ключа не предоставлен — "
+            "показанные цифры приблизительные, рассчитаны из данных о товарах.</i>"
+        ),
     },
 
     # ── Returns ──────────────────────────────────────────────────────────────
@@ -218,6 +264,24 @@ TEXTS = {
         "uz": "❌ Raqiblar topilmadi.",
         "ru": "❌ Конкуренты не найдены.",
     },
+    "competitor_blocked_note": {
+        "uz": (
+            "⚠️ Avtomatik narx olinmadi (Uzum cloud IP larni bloklaydi). "
+            "Aniq taqqoslash uchun UZ IP/proxy kerak."
+        ),
+        "ru": (
+            "⚠️ Автоцена недоступна (Uzum блокирует облачные IP). "
+            "Для точного сравнения нужен UZ IP/прокси."
+        ),
+    },
+    "competitor_manual_prompt": {
+        "uz": "✍️ Raqobatchi narxini qo'lda kiriting (faqat raqam, so'mda):",
+        "ru": "✍️ Введите цену конкурента вручную (только число, в сумах):",
+    },
+    "competitor_manual_invalid": {
+        "uz": "❌ Noto'g'ri qiymat. Faqat musbat raqam yuboring.",
+        "ru": "❌ Неверное значение. Отправьте только положительное число.",
+    },
 
     # ── AI ────────────────────────────────────────────────────────────────────
     "ai_title": {
@@ -256,6 +320,214 @@ TEXTS = {
     "btn_ai_sales": {"uz": "📊 Savdo tahlili", "ru": "📊 Анализ продаж"},
     "btn_ai_storage": {"uz": "🏭 Ombor tavsiyasi", "ru": "🏭 Совет по складу"},
     "btn_ai_question": {"uz": "💬 Savol berish", "ru": "💬 Задать вопрос"},
+
+    # ── Scheduler: morning report ─────────────────────────────────────────────
+    "sched_morning_title": {
+        "uz": "🌅 <b>Ertalabki hisobot</b>",
+        "ru": "🌅 <b>Утренний отчёт</b>",
+    },
+    "sched_morning_body": {
+        "uz": (
+            "📦 Kecha buyurtmalar: <b>{total}</b>\n"
+            "✅ Yetkazildi: <b>{delivered}</b>\n"
+            "❌ Bekor qilindi: <b>{cancelled}</b>\n"
+            "💰 Tushum: <b>{revenue:,.0f} so'm</b>"
+        ),
+        "ru": (
+            "📦 Заказов вчера: <b>{total}</b>\n"
+            "✅ Доставлено: <b>{delivered}</b>\n"
+            "❌ Отменено: <b>{cancelled}</b>\n"
+            "💰 Выручка: <b>{revenue:,.0f} сум</b>"
+        ),
+    },
+    "sched_morning_storage": {
+        "uz": (
+            "🏭 Ombor holati:\n"
+            "  💸 Pullik saqlash: {paid} ta\n"
+            "  🚨 Xavfli: {alert} ta\n"
+            "  ⚠️ Ogohlantirish: {warn} ta\n"
+            "  ✅ Yaxshi: {ok} ta"
+        ),
+        "ru": (
+            "🏭 Состояние склада:\n"
+            "  💸 Платное хранение: {paid} шт.\n"
+            "  🚨 Критично: {alert} шт.\n"
+            "  ⚠️ Предупреждение: {warn} шт.\n"
+            "  ✅ Норма: {ok} шт."
+        ),
+    },
+
+    # ── Scheduler: storage alerts ─────────────────────────────────────────────
+    "sched_storage_header": {
+        "uz": "🚨 <b>Ombor ogohlantirishi!</b>",
+        "ru": "🚨 <b>Внимание: склад!</b>",
+    },
+    "sched_storage_line": {
+        "uz": "{icon} Nakładnoy #{invoice_number}: {days} kun saqlangan, {qty} dona",
+        "ru": "{icon} Накладная #{invoice_number}: хранится {days} дн., {qty} шт.",
+    },
+
+    # ── Scheduler: delivered ──────────────────────────────────────────────────
+    "sched_delivered": {
+        "uz": "✅ <b>{count} ta buyurtma yetkazildi!</b>\nHaridor tovarni qabul qildi.",
+        "ru": "✅ <b>{count} заказ(ов) доставлено!</b>\nПокупатель получил товар.",
+    },
+    "sched_delivered_detail": {
+        "uz": (
+            "📦 <b>{name}</b>\n"
+            "🔖 SKU: {sku}\n"
+            "💰 Narx: {price:,.0f} so'm\n"
+            "📋 Komissiya: {commission:,.0f} so'm\n"
+            "✅ Foyda: {profit:,.0f} so'm\n"
+            "📅 Qabul qilindi: {date}"
+        ),
+        "ru": (
+            "📦 <b>{name}</b>\n"
+            "🔖 SKU: {sku}\n"
+            "💰 Цена: {price:,.0f} сум\n"
+            "📋 Комиссия: {commission:,.0f} сум\n"
+            "✅ Прибыль: {profit:,.0f} сум\n"
+            "📅 Получено: {date}"
+        ),
+    },
+
+    # ── Scheduler: rating ─────────────────────────────────────────────────────
+    "sched_rating": {
+        "uz": (
+            "⭐ <b>Do'kon reytingi past!</b>\n"
+            "Do'kon: {shop_name}\n"
+            "Reyting: <b>{rating}</b> / 5.0\n"
+            "Iltimos, mijozlar shikoyatlarini ko'rib chiqing."
+        ),
+        "ru": (
+            "⭐ <b>Рейтинг магазина низкий!</b>\n"
+            "Магазин: {shop_name}\n"
+            "Рейтинг: <b>{rating}</b> / 5.0\n"
+            "Пожалуйста, проверьте жалобы покупателей."
+        ),
+    },
+
+    # ── Scheduler: forecast ───────────────────────────────────────────────────
+    "sched_forecast_header": {
+        "uz": "📉 <b>Tovar tugash ogohlantirishilari:</b>",
+        "ru": "📉 <b>Предупреждение о заканчивающихся товарах:</b>",
+    },
+    "sched_forecast_line": {
+        "uz": "{icon} {name}: {days} kun qoldi",
+        "ru": "{icon} {name}: осталось {days} дн.",
+    },
+
+    # ── Scheduler: returns ────────────────────────────────────────────────────
+    "sched_returns": {
+        "uz": (
+            "↩️ <b>{count} ta yangi qaytarma!</b>\n"
+            "Qaytarmalarni ko'rish uchun /start → Qaytarmalar"
+        ),
+        "ru": (
+            "↩️ <b>{count} новых возврата!</b>\n"
+            "Для просмотра: /start → Возвраты"
+        ),
+    },
+
+    # ── Reports: weekly / monthly bodies ──────────────────────────────────────
+    "report_weekly_body": {
+        "uz": (
+            "📦 Jami buyurtmalar: <b>{total}</b>\n"
+            "✅ Yetkazildi: <b>{delivered}</b>\n"
+            "❌ Bekor qilindi: <b>{cancelled}</b>\n"
+            "💰 Tushum: <b>{revenue:,.0f} so'm</b>"
+        ),
+        "ru": (
+            "📦 Всего заказов: <b>{total}</b>\n"
+            "✅ Доставлено: <b>{delivered}</b>\n"
+            "❌ Отменено: <b>{cancelled}</b>\n"
+            "💰 Выручка: <b>{revenue:,.0f} сум</b>"
+        ),
+    },
+    "report_weekly_daily_header": {
+        "uz": "📊 <b>Kunlik:</b>",
+        "ru": "📊 <b>По дням:</b>",
+    },
+    "report_monthly_body": {
+        "uz": (
+            "📦 Jami buyurtmalar: <b>{total}</b>\n"
+            "✅ Yetkazildi: <b>{delivered}</b>\n"
+            "❌ Bekor: <b>{cancelled}</b>\n"
+            "💰 Tushum: <b>{revenue:,.0f} so'm</b>"
+        ),
+        "ru": (
+            "📦 Всего заказов: <b>{total}</b>\n"
+            "✅ Доставлено: <b>{delivered}</b>\n"
+            "❌ Отменено: <b>{cancelled}</b>\n"
+            "💰 Выручка: <b>{revenue:,.0f} сум</b>"
+        ),
+    },
+    "report_monthly_weeks_header": {
+        "uz": "<b>Haftalar bo'yicha:</b>",
+        "ru": "<b>По неделям:</b>",
+    },
+
+    # ── Finance overlay (shared: orders, daily, weekly, monthly) ──────────────
+    "finance_commission": {
+        "uz": "📋 Komissiya: <b>{commission:,.0f} so'm</b>",
+        "ru": "📋 Комиссия: <b>{commission:,.0f} сум</b>",
+    },
+    "finance_logistics": {
+        "uz": "🚚 Logistika: <b>{logistics:,.0f} so'm</b>",
+        "ru": "🚚 Логистика: <b>{logistics:,.0f} сум</b>",
+    },
+    "finance_net_profit": {
+        "uz": "✅ Sof foyda: <b>{profit:,.0f} so'm</b>",
+        "ru": "✅ Чистая прибыль: <b>{profit:,.0f} сум</b>",
+    },
+    "finance_margin": {
+        "uz": "📊 Rentabellik: <b>{margin:.1f}%</b>",
+        "ru": "📊 Рентабельность: <b>{margin:.1f}%</b>",
+    },
+
+    # ── Daily product report (09:00 digest) ───────────────────────────────────
+    "product_report_title": {
+        "uz": "🌅 <b>Kunlik mahsulot hisoboti</b>",
+        "ru": "🌅 <b>Ежедневный отчёт по товарам</b>",
+    },
+    "product_report_body": {
+        "uz": (
+            "📦 Aktiv mahsulotlar: <b>{total_active}</b> ta\n"
+            "📊 Umumiy qoldiq: <b>{total_stock}</b> dona\n"
+            "⚠️ Kam qolgan: <b>{low_count}</b> ta\n"
+            "🚫 Tugagan: <b>{out_count}</b> ta"
+        ),
+        "ru": (
+            "📦 Активных товаров: <b>{total_active}</b> шт.\n"
+            "📊 Общий остаток: <b>{total_stock}</b> шт.\n"
+            "⚠️ Мало осталось: <b>{low_count}</b> шт.\n"
+            "🚫 Закончились: <b>{out_count}</b> шт."
+        ),
+    },
+    "product_report_item": {
+        "uz": "• {name}: <b>{qty}</b> dona",
+        "ru": "• {name}: <b>{qty}</b> шт.",
+    },
+
+    # ── Per-sale push (quantity-decrease detection) ───────────────────────────
+    "sale_push_title": {
+        "uz": "🔔 <b>Yangi sotuv!</b>",
+        "ru": "🔔 <b>Новая продажа!</b>",
+    },
+    "sale_push_item": {
+        "uz": (
+            "📦 <b>{product}</b>\n"
+            "🎨 Variant: {variant}\n"
+            "🛒 Sotildi: <b>{sold}</b> dona\n"
+            "📊 Qoldiq: <b>{remaining}</b> dona"
+        ),
+        "ru": (
+            "📦 <b>{product}</b>\n"
+            "🎨 Вариант: {variant}\n"
+            "🛒 Продано: <b>{sold}</b> шт.\n"
+            "📊 Остаток: <b>{remaining}</b> шт."
+        ),
+    },
 }
 
 

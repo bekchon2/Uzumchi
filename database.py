@@ -53,6 +53,18 @@ async def init_db():
                 added_at     INTEGER DEFAULT (strftime('%s','now'))
             )
         """)
+        # SKU snapshot jadval — per-sale push (quantity-decrease detection) uchun.
+        # Migration-safe: CREATE TABLE IF NOT EXISTS, mavjud satrlarga tegmaydi.
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS sku_snapshots (
+                user_id    INTEGER NOT NULL,
+                shop_id    INTEGER NOT NULL,
+                sku_id     TEXT    NOT NULL,
+                qty        INTEGER NOT NULL,
+                updated_at INTEGER DEFAULT (strftime('%s','now')),
+                UNIQUE (user_id, shop_id, sku_id)
+            )
+        """)
         await db.commit()
 
         # Eski DB ustunlarini qo'shish (migration)
@@ -254,5 +266,40 @@ async def delete_product_url(url_id: int, user_id: int):
         await db.execute(
             "DELETE FROM product_urls WHERE id=? AND user_id=?",
             (url_id, user_id)
+        )
+        await db.commit()
+
+
+
+# ─── SKU snapshots (per-sale push) ─────────────────────────────────────────────
+
+async def get_sku_snapshots(user_id: int, shop_id: int) -> dict[str, int]:
+    """Return {sku_id: qty} for all rows matching (user_id, shop_id); {} when none."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT sku_id, qty FROM sku_snapshots WHERE user_id=? AND shop_id=?",
+            (user_id, shop_id),
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return {str(r[0]): int(r[1]) for r in rows}
+
+
+async def save_sku_snapshots(user_id: int, shop_id: int, mapping: dict):
+    """Upsert each (sku_id, qty) pair for (user_id, shop_id).
+
+    sku_id is coerced to str and qty to int. Existing rows are updated (qty +
+    refreshed updated_at); new rows are inserted. Idempotent for unchanged values.
+    """
+    if not mapping:
+        return
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.executemany(
+            """
+            INSERT INTO sku_snapshots (user_id, shop_id, sku_id, qty)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(user_id, shop_id, sku_id)
+            DO UPDATE SET qty=excluded.qty, updated_at=strftime('%s','now')
+            """,
+            [(user_id, shop_id, str(sku_id), int(qty)) for sku_id, qty in mapping.items()],
         )
         await db.commit()

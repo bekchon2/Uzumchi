@@ -1,0 +1,23 @@
+{
+  "pbtResults": {
+    "1. Write bug-condition exploration test for shop-name resolution": {
+      "status": "passed",
+      "failingExample": "On UNFIXED code, all 3 exploration cases fail (confirming the bug):\n- _extract_shop_name({\"seller\":{\"title\":\"ACME\"}}) -> AttributeError (helper does not exist; narrow extraction only reads shop.name/shopName).\n- get_product_info_by_url with API=None + HTML '{\"seller\":{\"title\":\"HtmlShop\"}}' -> info[\"shop\"] == \"—\" (HTML-primary branch hardcodes \"—\").\n- get_product_info_by_url with API=None + JSON-LD '\"brand\":{\"name\":\"BrandX\"}' -> info[\"shop\"] == \"—\".\nCounterexample: AssertionError: assert '—' == 'BrandX'.",
+      "lastRunTimestamp": 1781432680542
+    },
+    "3.2 Verify the shop-name exploration test now passes": {
+      "status": "passed",
+      "lastRunTimestamp": 1781432777410
+    },
+    "4. Write bug-condition exploration test for revenue overcounting": {
+      "status": "passed",
+      "failingExample": "On UNFIXED code: one SKU {sold=100, returned=10, price=21000} yields total_revenue == 2_100_000 (gross sold*price), but expected net == 1_890_000 (max(0, 100-10)*21000). Counterexample: assert 2100000.0 == 1890000 — returns are not netted out, confirming the overcount.",
+      "lastRunTimestamp": 1781432870659
+    },
+    "6.2 Verify the revenue exploration test now passes": {
+      "status": "passed",
+      "lastRunTimestamp": 1781432917482
+    }
+  },
+  "executionHistory": {}
+}

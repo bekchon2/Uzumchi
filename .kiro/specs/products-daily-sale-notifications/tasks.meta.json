@@ -1,0 +1,41 @@
+{
+  "pbtResults": {
+    "1.2 Write property test for active-filter signal handling": {
+      "status": "passed",
+      "lastRunTimestamp": 1781514097612
+    },
+    "1.3 Write property test for fail-open default": {
+      "status": "passed",
+      "lastRunTimestamp": 1781514097618
+    },
+    "2.3 Write property test for snapshot upsert round-trip and idempotence": {
+      "status": "passed",
+      "lastRunTimestamp": 1781514109248
+    },
+    "3.3 Write property test for chunking order preservation": {
+      "status": "passed",
+      "lastRunTimestamp": 1781514110250
+    },
+    "3.4 Write property test for chunk size bound": {
+      "status": "passed",
+      "lastRunTimestamp": 1781514111262
+    },
+    "5.4 Write property test for sale detection on strict decrease": {
+      "status": "passed",
+      "lastRunTimestamp": 1781514112260
+    },
+    "5.5 Write property test for increases, new SKUs, and id-less SKUs": {
+      "status": "passed",
+      "lastRunTimestamp": 1781514113727
+    },
+    "5.6 Write mocked-job test for sale-check first run and decrease": {
+      "status": "passed",
+      "lastRunTimestamp": 1781514115948
+    },
+    "5.7 Write mocked-job tests for the daily report": {
+      "status": "passed",
+      "lastRunTimestamp": 1781514116099
+    }
+  },
+  "executionHistory": {}
+}

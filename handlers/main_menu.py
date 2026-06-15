@@ -12,6 +12,9 @@ from database import get_user
 from services.uzum_api import (
     get_products, get_fbs_orders, get_sales_stats_from_products,
     summarize_orders, calc_total_qty, format_product_skus,
+    is_product_active,
+    get_finance_orders, summarize_finance_orders,
+    get_invoices,
     _days_ago_ms, _now_ms
 )
 from services.competitor_monitor import (
@@ -19,6 +22,7 @@ from services.competitor_monitor import (
     check_saved_urls,
     format_single_product_report,
 )
+from services.storage_tracker import parse_invoices, get_storage_alerts, FREE_DAYS
 from locales.i18n import t
 from utils.keyboards import (
     main_menu_keyboard, settings_keyboard,
@@ -32,7 +36,31 @@ from utils.helpers import (
 logger = logging.getLogger(__name__)
 router = Router()
 
-PRODUCTS_PER_PAGE = 5  # SKU ko'rsatish uchun kamroq sahifada
+PRODUCTS_PER_PAGE = 5  # SKU ko'rsatish uchun kamroq sahifada (deprecated — endi paginatsiya yo'q)
+TG_CHUNK_LIMIT = 3500  # Telegram 4096-belgi chegarasidan xavfsiz pastda
+
+
+def build_chunks(header: str, blocks: list[str], limit: int = TG_CHUNK_LIMIT) -> list[str]:
+    """Pack header + per-product blocks into messages each <= limit chars.
+
+    The ordered concatenation of all blocks is preserved across chunks — no block is
+    dropped, duplicated, split, or reordered. The header appears in the first chunk
+    only. A single block longer than ``limit`` becomes its own message.
+    """
+    chunks: list[str] = []
+    current = header
+    for block in blocks:
+        candidate = current + "\n\n" + block if current else block
+        if len(candidate) <= limit:
+            current = candidate
+        else:
+            if current:
+                chunks.append(current)
+            # A single block longer than the limit becomes its own message
+            current = block
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 # ─── Raqib narx monitoring ────────────────────────────────────────────────────
@@ -41,6 +69,7 @@ class CompetitorStates(StatesGroup):
     waiting_product_name = State()
     waiting_url = State()
     waiting_url_name = State()
+    waiting_manual_price = State()
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -76,25 +105,21 @@ async def cmd_products(message: Message, state: FSMContext):
         return
     lang = user.get("lang", "ru")
     msg = await message.answer(t("loading", lang), parse_mode="HTML")
-    await _show_products_page(message, msg, user, lang, page=1)
+    await _show_products_page(message, msg, user, lang)
 
 
-async def _show_products_page(message: Message, msg, user: dict, lang: str, page: int = 1):
+async def _show_products_page(message: Message, msg, user: dict, lang: str):
     try:
         products = await get_products(user["api_key"], user["shop_id"])
-        if not products:
+        active = [p for p in products if is_product_active(p)]
+        if not active:
             await _edit_or_answer(msg, message, t("no_data", lang))
             return
 
-        total_products = len(products)
+        total_products = len(active)
 
-        # Jami qoldiqni barcha SKU lar bo'yicha hisoblash
-        total_qty = sum(calc_total_qty(p) for p in products)
-
-        pages = chunk_list(products, PRODUCTS_PER_PAGE)
-        total_pages = len(pages)
-        page = max(1, min(page, total_pages))
-        page_products = pages[page - 1]
+        # Jami qoldiqni faqat aktiv mahsulotlar SKU lari bo'yicha hisoblash
+        total_qty = sum(calc_total_qty(p) for p in active)
 
         header = (
             f"📦 <b>Mahsulotlarim</b> ({total_products} xil | jami {total_qty} dona):"
@@ -102,14 +127,14 @@ async def _show_products_page(message: Message, msg, user: dict, lang: str, page
             f"📦 <b>Мои товары</b> ({total_products} видов | всего {total_qty} шт.):"
         )
 
-        lines = [header]
-        for p in page_products:
-            lines.append("")
-            lines.append(format_product_skus(p, lang))
+        blocks = [format_product_skus(p, lang) for p in active]
+        chunks = build_chunks(header, blocks)
 
-        text = "\n".join(lines)
-        kb = products_nav_keyboard(page, total_pages, lang)
-        await _edit_or_answer(msg, message, text, kb=kb)
+        # Birinchi chunk — "loading" xabarni almashtiradi, tugma yo'q
+        await _edit_or_answer(msg, message, chunks[0])
+        # Qolgan chunklar — yangi xabar, reply_markup YO'Q
+        for extra in chunks[1:]:
+            await message.answer(extra, parse_mode="HTML")
 
     except Exception as e:
         logger.error(f"Products error: {e}")
@@ -121,18 +146,21 @@ async def _show_products_page(message: Message, msg, user: dict, lang: str, page
 
 @router.callback_query(F.data.startswith("products_page_"))
 async def products_pagination(callback: CallbackQuery):
-    page = int(callback.data.split("_")[-1])
+    # Deprecated: paginatsiya o'chirildi. Eski xabardagi tugma kelsa — xatosiz
+    # qayta render qilamiz (single-page view).
     user = await get_user(callback.from_user.id)
     if not user:
         await callback.answer()
         return
     lang = user.get("lang", "ru")
-    await _show_products_page(callback.message, callback.message, user, lang, page=page)
+    msg = await callback.message.answer(t("loading", lang), parse_mode="HTML")
+    await _show_products_page(callback.message, msg, user, lang)
     await callback.answer()
 
 
 @router.callback_query(F.data == "products_noop")
 async def products_noop(callback: CallbackQuery):
+    # Deprecated paginatsiya tugmasi — shunchaki tasdiqlaymiz.
     await callback.answer()
 
 
@@ -190,25 +218,29 @@ async def cmd_orders(message: Message):
                 await msg.edit_text(text, parse_mode="HTML")
                 return
 
-        if lang == "uz":
-            text = (
-                f"🛒 <b>Buyurtmalar</b> (so'nggi 24 soat)\n\n"
-                f"📊 Jami: <b>{stats['total']}</b>\n"
-                f"✅ Yetkazildi: <b>{stats['delivered']}</b>\n"
-                f"🔄 Jarayonda: <b>{stats['processing']}</b>\n"
-                f"🚚 Yo'lda: <b>{stats['shipped']}</b>\n"
-                f"❌ Bekor: <b>{stats['cancelled']}</b>\n"
-                f"💰 Tushum: <b>{stats['revenue']:,.0f} so'm</b>"
+        text = (
+            t("orders_title", lang) + "\n\n"
+            + t("orders_summary", lang,
+                total=stats["total"], delivered=stats["delivered"],
+                processing=stats["processing"], shipped=stats["shipped"],
+                cancelled=stats["cancelled"], revenue=stats["revenue"])
+        )
+
+        # Finance overlay (conditional) — komissiya va sof foyda
+        try:
+            fin_raw = await get_finance_orders(
+                user["api_key"], date_from=_days_ago_ms(1), date_to=_now_ms()
             )
-        else:
-            text = (
-                f"🛒 <b>Заказы</b> (последние 24 часа)\n\n"
-                f"📊 Всего: <b>{stats['total']}</b>\n"
-                f"✅ Доставлено: <b>{stats['delivered']}</b>\n"
-                f"🔄 В обработке: <b>{stats['processing']}</b>\n"
-                f"🚚 В пути: <b>{stats['shipped']}</b>\n"
-                f"❌ Отменено: <b>{stats['cancelled']}</b>\n"
-                f"💰 Выручка: <b>{stats['revenue']:,.0f} сум</b>"
+            finance = summarize_finance_orders(fin_raw)
+        except Exception as fe:
+            logger.warning(f"Orders finance fetch failed: {fe}")
+            finance = {}
+
+        if finance and finance.get("revenue", 0) > 0:
+            text += (
+                "\n"
+                + t("finance_commission", lang, commission=finance["commission"]) + "\n"
+                + t("finance_net_profit", lang, profit=finance["net_profit"])
             )
 
         if orders:
@@ -328,80 +360,55 @@ async def cmd_storage(message: Message):
             if ok_list:
                 text += f"✅ <b>Хороший запас — >15 шт. ({len(ok_list)} шт.)</b>"
 
+        # ── Free-storage countdown (additive) ────────────────────────────────
+        # Reuse the existing invoice/free-days logic. get_invoices returns [] on
+        # 403/error, so this never breaks the stock view above.
+        try:
+            invoices = await get_invoices(user["api_key"], user["shop_id"])
+        except Exception as ie:
+            logger.warning(f"Storage invoices fetch failed: {ie}")
+            invoices = []
+        items = parse_invoices(invoices)
+
+        if items:
+            alerts = get_storage_alerts(items)
+            at_risk = len(alerts["paid"]) + len(alerts["alert"]) + len(alerts["warn"])
+            min_left = min(max(0, FREE_DAYS - it.days_stored) for it in items)
+
+            # Icon per item, derived from the alert buckets (no extra constants).
+            icon_map = {}
+            for it in alerts["paid"]:
+                icon_map[it] = "💸"
+            for it in alerts["alert"]:
+                icon_map[it] = "🚨"
+            for it in alerts["warn"]:
+                icon_map[it] = "⚠️"
+            for it in alerts["ok"]:
+                icon_map[it] = "✅"
+
+            text += "\n\n" + t("storage_free_header", lang)
+            text += "\n" + t("storage_free_summary", lang, min_left=min_left, at_risk=at_risk)
+
+            # Up to 5 most-urgent invoices (highest days_stored first).
+            urgent = sorted(items, key=lambda it: it.days_stored, reverse=True)[:5]
+            for it in urgent:
+                free_days_left = max(0, FREE_DAYS - it.days_stored)
+                text += "\n" + t(
+                    "storage_free_item", lang,
+                    icon=icon_map.get(it, "✅"),
+                    invoice_number=it.invoice_number,
+                    free_days_left=free_days_left,
+                    qty=it.total_accepted,
+                )
+        else:
+            text += "\n\n" + t("storage_free_unavailable", lang)
+
         await msg.edit_text(text.strip(), parse_mode="HTML")
 
     except Exception as e:
         logger.error(f"Storage error: {e}")
         await msg.edit_text(
             f"❌ <b>Ошибка склада:</b>\n<code>{str(e)[:200]}</code>",
-            parse_mode="HTML"
-        )
-
-
-# ─── Bugungi hisobot ──────────────────────────────────────────────────────────
-
-@router.message(F.text.in_(["📊 Hisobot", "📊 Отчёт"]))
-async def cmd_report_today(message: Message):
-    user = await _get_user_or_warn(message)
-    if not user:
-        return
-    lang = user.get("lang", "ru")
-    msg = await message.answer(t("loading", lang), parse_mode="HTML")
-
-    try:
-        orders = await get_fbs_orders(user["api_key"], date_from=_days_ago_ms(1))
-        stats = summarize_orders(orders)
-        products = await get_products(user["api_key"], user["shop_id"])
-
-        total_products = len(products)
-        # Barcha SKU lar bo'yicha to'g'ri qoldiq
-        total_qty = sum(calc_total_qty(p) for p in products)
-
-        low_stock = []
-        out_of_stock = []
-        for p in products:
-            name = short_name(p.get("title") or p.get("name") or "—", 30)
-            qty = calc_total_qty(p)
-            if qty == 0:
-                out_of_stock.append(name)
-            elif qty <= 5:
-                low_stock.append(f"{name} ({qty})")
-
-        if lang == "uz":
-            text = (
-                f"📊 <b>Bugungi hisobot</b>\n\n"
-                f"🛒 <b>Buyurtmalar (24 soat):</b>\n"
-                f"  Jami: {stats['total']} | ✅ {stats['delivered']} | ❌ {stats['cancelled']}\n"
-                f"  💰 Tushum: {stats['revenue']:,.0f} so'm\n\n"
-                f"📦 <b>Mahsulotlar:</b>\n"
-                f"  Tovar turlari: {total_products} ta\n"
-                f"  Jami qoldiq (barcha SKU): {total_qty} dona"
-            )
-        else:
-            text = (
-                f"📊 <b>Отчёт за сегодня</b>\n\n"
-                f"🛒 <b>Заказы (24 часа):</b>\n"
-                f"  Всего: {stats['total']} | ✅ {stats['delivered']} | ❌ {stats['cancelled']}\n"
-                f"  💰 Выручка: {stats['revenue']:,.0f} сум\n\n"
-                f"📦 <b>Товары:</b>\n"
-                f"  Видов товаров: {total_products}\n"
-                f"  Общий остаток (все SKU): {total_qty} шт."
-            )
-
-        if low_stock:
-            text += "\n\n" + t("low_stock_header", lang) + "\n"
-            text += "\n".join(f"  ⚠️ {n}" for n in low_stock[:10])
-        if out_of_stock:
-            text += "\n\n" + t("out_of_stock_header", lang) + "\n"
-            text += "\n".join(f"  🚫 {n}" for n in out_of_stock[:10])
-
-        # Tugmasiz — faqat matn
-        await msg.edit_text(text, parse_mode="HTML")
-
-    except Exception as e:
-        logger.error(f"Report error: {e}")
-        await msg.edit_text(
-            f"❌ <b>Ошибка отчёта:</b>\n<code>{str(e)[:200]}</code>",
             parse_mode="HTML"
         )
 
@@ -532,9 +539,80 @@ async def competitor_url_received(message: Message, state: FSMContext):
                 my_price = safe_float(sku.get("price") or sku.get("purchasePrice"))
             break
 
+    # Avtomatik narx topildimi? (api/html va min_price > 0) — odatdagi yo'l.
+    price_source = info.get("price_source")
+    min_price = safe_float(info.get("min_price") or 0)
+    if price_source in ("api", "html") and min_price > 0:
+        from services.competitor_monitor import format_single_product_report
+        report = format_single_product_report(product_name_short, my_price, info, lang)
+        await msg.edit_text(report, parse_mode="HTML")
+        await state.clear()
+        return
+
+    # Avtomatik narx olinmadi (bloklangan/yo'q) — qo'lda kiritishga o'tamiz.
+    await state.update_data(
+        pending_name=product_name_short, pending_url=url, my_price=my_price
+    )
+    await state.set_state(CompetitorStates.waiting_manual_price)
+    await msg.edit_text(
+        t("competitor_blocked_note", lang) + "\n\n" + t("competitor_manual_prompt", lang),
+        parse_mode="HTML",
+    )
+
+
+@router.message(CompetitorStates.waiting_manual_price)
+async def competitor_manual_price_received(message: Message, state: FSMContext):
+    """Foydalanuvchi kiritgan raqobatchi narxini qabul qilib, taqqoslash hisobotini chiqaradi."""
+    user = await get_user(message.from_user.id)
+    lang = user.get("lang", "ru") if user else "ru"
+
+    text_in = (message.text or "").strip()
+
+    # Orqaga — bekor qilish
+    if text_in in ["🔙 Назад", "🔙 Orqaga"]:
+        await state.clear()
+        return
+
+    # Raqamni ajratib olish (bo'sh joy / ajratuvchilarni tozalash)
+    cleaned = (
+        text_in.replace(" ", "").replace("\u00a0", "")
+        .replace(",", "").replace("'", "").replace("’", "")
+    )
+    try:
+        manual_price = float(cleaned)
+    except (ValueError, TypeError):
+        manual_price = -1.0
+
+    if manual_price <= 0:
+        await message.answer(t("competitor_manual_invalid", lang))
+        return  # holatda qolamiz, qayta so'raymiz
+
+    data = await state.get_data()
+    pending_name = data.get("pending_name") or "Tovar"
+    pending_url = data.get("pending_url") or ""
+    my_price = safe_float(data.get("my_price") or 0)
+
+    from database import add_product_url
+    await add_product_url(
+        user_id=message.from_user.id,
+        shop_id=user["shop_id"] if user else 0,
+        product_name=pending_name,
+        uzum_url=pending_url,
+    )
+
+    info = {
+        "title": pending_name,
+        "min_price": manual_price,
+        "max_price": manual_price,
+        "price_source": "manual",
+        "html_only": False,
+        "shop": "—",
+        "rating": 0,
+        "reviews": 0,
+    }
     from services.competitor_monitor import format_single_product_report
-    report = format_single_product_report(product_name_short, my_price, info, lang)
-    await msg.edit_text(report, parse_mode="HTML")
+    report = format_single_product_report(pending_name, my_price, info, lang)
+    await message.answer(report, parse_mode="HTML")
     await state.clear()
 
 

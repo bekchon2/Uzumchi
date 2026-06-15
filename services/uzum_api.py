@@ -8,6 +8,8 @@ import ssl
 import aiohttp
 import json
 
+from utils.helpers import safe_float, safe_int
+
 logger = logging.getLogger(__name__)
 
 BASE_URL = "https://api-seller.uzum.uz/api/seller-openapi"
@@ -115,6 +117,47 @@ async def get_products(api_key: str, shop_id: int) -> list[dict]:
                 break
 
     return products
+
+
+ARCHIVED_STATUSES = {
+    "ARCHIVED", "ARCHIVE", "INACTIVE", "DELETED", "HIDDEN", "MODERATION_FAILED",
+}
+
+
+def is_product_active(p: dict) -> bool:
+    """Return False for archived/inactive products, True otherwise (fail-open default).
+
+    Defensive multi-field check. Uzum's product payload is not fully documented for
+    the archived/inactive case, so the inspected field set below is a defensive
+    superset. Once real archived-product payloads are observed in logs, this set may
+    need tuning (narrow or extend). Defaulting to True ensures the view never *hides*
+    a product we are unsure about (fail-open for visibility).
+
+    A product is considered INACTIVE when any of these decisive signals is present:
+      - ``status`` or ``productStatus`` (``.strip().upper()``) is in ``ARCHIVED_STATUSES``
+      - ``archived`` is ``True``
+      - ``isArchived`` is ``True``
+      - ``active`` is ``False``
+      - ``isActive`` is ``False``
+    Otherwise the product is considered ACTIVE.
+    """
+    # 1) String status fields (case-insensitive)
+    for field in ("status", "productStatus"):
+        val = p.get(field)
+        if isinstance(val, str) and val.strip().upper() in ARCHIVED_STATUSES:
+            return False
+    # 2) Boolean archived flags
+    if p.get("archived") is True:
+        return False
+    if p.get("isArchived") is True:
+        return False
+    # 3) Boolean active flags (explicit False only)
+    if p.get("active") is False:
+        return False
+    if p.get("isActive") is False:
+        return False
+    # 4) Default: assume active (fail-open)
+    return True
 
 
 def calc_total_qty(product: dict) -> int:
@@ -334,7 +377,8 @@ async def get_sales_stats_from_products(api_key: str, shop_id: int) -> dict:
 
                 total_sold += sold
                 total_returned += returned
-                total_revenue += sold * price
+                net_sold = max(0, sold - returned)
+                total_revenue += net_sold * price
 
                 if qty == 0:
                     out_count += 1
@@ -486,4 +530,75 @@ def summarize_orders(orders: list[dict]) -> dict:
         "processing": processing,
         "shipped": shipped,
         "revenue": revenue,
+    }
+
+
+
+# ─── Finance orders: parsing + aggregation (additive) ─────────────────────────
+# These functions are ADDED for the finance-overlay reporting feature. They consume
+# the raw dict returned by `get_finance_orders` (Uzumchi signature) and do NOT change
+# any existing contract (get_products / summarize_orders / parse_invoices remain as-is).
+
+def extract_finance_orders(data) -> list[dict]:
+    """
+    `/v1/finance/orders` javobidan buyurtma elementlarini ajratib olish.
+    `orderItems` / `orders` / `items` / `content` kalitlarini tekshiradi,
+    yalang'och list ham qabul qilinadi.
+    """
+    if isinstance(data, list):
+        return data
+    if not isinstance(data, dict):
+        return []
+    return (
+        data.get("orderItems")
+        or data.get("orders")
+        or data.get("items")
+        or data.get("content")
+        or []
+    )
+
+
+def parse_finance_order(raw: dict) -> dict:
+    """
+    Bitta finance-order elementini normallashtirish.
+    Barcha raqamli maydonlar 0 ga (amount esa 1 ga) default bo'ladi.
+    """
+    if not isinstance(raw, dict):
+        raw = {}
+    return {
+        "id":            str(raw.get("id") or ""),
+        "order_id":      str(raw.get("orderId") or ""),
+        "status":        raw.get("status") or "",
+        "date":          safe_int(raw.get("date")),
+        "date_issued":   safe_int(raw.get("dateIssued")),
+        "sell_price":    safe_float(raw.get("sellPrice") or raw.get("sellerPrice")),
+        "commission":    safe_float(raw.get("commission")),
+        "seller_profit": safe_float(raw.get("sellerProfit")),
+        "logistics":     safe_float(raw.get("logisticDeliveryFee")),
+        "amount":        safe_int(raw.get("amount") or 1, 1),
+        "sku_title":     raw.get("skuTitle") or "",
+        "product_title": raw.get("productTitle") or "",
+    }
+
+
+def summarize_finance_orders(finance_raw) -> dict:
+    """
+    Finance-orderlar bo'yicha agregatlar.
+    Returns:
+        {count, revenue, commission, logistics, net_profit, margin_pct}
+    margin_pct = net_profit / revenue * 100 (revenue == 0 bo'lsa 0).
+    """
+    items = [parse_finance_order(o) for o in extract_finance_orders(finance_raw)]
+    revenue = sum(o["sell_price"] for o in items)
+    commission = sum(o["commission"] for o in items)
+    logistics = sum(o["logistics"] for o in items)
+    net_profit = sum(o["seller_profit"] for o in items)
+    margin_pct = (net_profit / revenue * 100) if revenue > 0 else 0
+    return {
+        "count": len(items),
+        "revenue": revenue,
+        "commission": commission,
+        "logistics": logistics,
+        "net_profit": net_profit,
+        "margin_pct": margin_pct,
     }

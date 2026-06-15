@@ -1,0 +1,25 @@
+{
+  "pbtResults": {
+    "1. Write bug condition exploration test for AI env-read-at-call-time": {
+      "status": "passed",
+      "failingExample": "GROQ_API_KEY set via os.environ AFTER `import services.gemini_ai` -> _select_providers() == [] instead of ['groq'] (module captured GROQ_API_KEY == \"\" at import time).",
+      "lastRunTimestamp": 1781429461218
+    },
+    "4. Write bug condition exploration test for daily Report removal": {
+      "status": "passed",
+      "failingExample": "main_menu_keyboard renders 7 buttons including '📊 Отчёт'/'📊 Hisobot' at index 3; handlers.main_menu still defines cmd_report_today.",
+      "lastRunTimestamp": 1781429526670
+    },
+    "7. Write bug condition exploration test for storage free-days countdown": {
+      "status": "passed",
+      "failingExample": "cmd_storage with get_invoices -> two ACCEPTED invoices (43 & 58 days stored): rendered text contains only stock groupings; no '17 дн'/'2 дн' free-days countdown and no 🚨 near-limit flag.",
+      "lastRunTimestamp": 1781429694748
+    },
+    "10. Write bug condition exploration test for competitor manual fallback + proxy": {
+      "status": "passed",
+      "failingExample": "competitor_url_received with get_product_info_by_url -> price_source=='none' renders product report and clears state (no waiting_manual_price prompt); CompetitorStates has no waiting_manual_price; _fetch_product_html/_get_product_from_api call session.get without proxy= (captured None instead of 'http://uzproxy:3128').",
+      "lastRunTimestamp": 1781429841268
+    }
+  },
+  "executionHistory": {}
+}
