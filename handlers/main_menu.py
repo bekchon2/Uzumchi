@@ -12,6 +12,7 @@ from database import get_user
 from services.uzum_api import (
     get_products, get_fbs_orders, get_sales_stats_from_products,
     summarize_orders, calc_total_qty, format_product_skus,
+    is_product_active,
     get_finance_orders, summarize_finance_orders,
     get_invoices,
     _days_ago_ms, _now_ms
@@ -35,7 +36,31 @@ from utils.helpers import (
 logger = logging.getLogger(__name__)
 router = Router()
 
-PRODUCTS_PER_PAGE = 5  # SKU ko'rsatish uchun kamroq sahifada
+PRODUCTS_PER_PAGE = 5  # SKU ko'rsatish uchun kamroq sahifada (deprecated — endi paginatsiya yo'q)
+TG_CHUNK_LIMIT = 3500  # Telegram 4096-belgi chegarasidan xavfsiz pastda
+
+
+def build_chunks(header: str, blocks: list[str], limit: int = TG_CHUNK_LIMIT) -> list[str]:
+    """Pack header + per-product blocks into messages each <= limit chars.
+
+    The ordered concatenation of all blocks is preserved across chunks — no block is
+    dropped, duplicated, split, or reordered. The header appears in the first chunk
+    only. A single block longer than ``limit`` becomes its own message.
+    """
+    chunks: list[str] = []
+    current = header
+    for block in blocks:
+        candidate = current + "\n\n" + block if current else block
+        if len(candidate) <= limit:
+            current = candidate
+        else:
+            if current:
+                chunks.append(current)
+            # A single block longer than the limit becomes its own message
+            current = block
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 # ─── Raqib narx monitoring ────────────────────────────────────────────────────
@@ -80,25 +105,21 @@ async def cmd_products(message: Message, state: FSMContext):
         return
     lang = user.get("lang", "ru")
     msg = await message.answer(t("loading", lang), parse_mode="HTML")
-    await _show_products_page(message, msg, user, lang, page=1)
+    await _show_products_page(message, msg, user, lang)
 
 
-async def _show_products_page(message: Message, msg, user: dict, lang: str, page: int = 1):
+async def _show_products_page(message: Message, msg, user: dict, lang: str):
     try:
         products = await get_products(user["api_key"], user["shop_id"])
-        if not products:
+        active = [p for p in products if is_product_active(p)]
+        if not active:
             await _edit_or_answer(msg, message, t("no_data", lang))
             return
 
-        total_products = len(products)
+        total_products = len(active)
 
-        # Jami qoldiqni barcha SKU lar bo'yicha hisoblash
-        total_qty = sum(calc_total_qty(p) for p in products)
-
-        pages = chunk_list(products, PRODUCTS_PER_PAGE)
-        total_pages = len(pages)
-        page = max(1, min(page, total_pages))
-        page_products = pages[page - 1]
+        # Jami qoldiqni faqat aktiv mahsulotlar SKU lari bo'yicha hisoblash
+        total_qty = sum(calc_total_qty(p) for p in active)
 
         header = (
             f"📦 <b>Mahsulotlarim</b> ({total_products} xil | jami {total_qty} dona):"
@@ -106,14 +127,14 @@ async def _show_products_page(message: Message, msg, user: dict, lang: str, page
             f"📦 <b>Мои товары</b> ({total_products} видов | всего {total_qty} шт.):"
         )
 
-        lines = [header]
-        for p in page_products:
-            lines.append("")
-            lines.append(format_product_skus(p, lang))
+        blocks = [format_product_skus(p, lang) for p in active]
+        chunks = build_chunks(header, blocks)
 
-        text = "\n".join(lines)
-        kb = products_nav_keyboard(page, total_pages, lang)
-        await _edit_or_answer(msg, message, text, kb=kb)
+        # Birinchi chunk — "loading" xabarni almashtiradi, tugma yo'q
+        await _edit_or_answer(msg, message, chunks[0])
+        # Qolgan chunklar — yangi xabar, reply_markup YO'Q
+        for extra in chunks[1:]:
+            await message.answer(extra, parse_mode="HTML")
 
     except Exception as e:
         logger.error(f"Products error: {e}")
@@ -125,18 +146,21 @@ async def _show_products_page(message: Message, msg, user: dict, lang: str, page
 
 @router.callback_query(F.data.startswith("products_page_"))
 async def products_pagination(callback: CallbackQuery):
-    page = int(callback.data.split("_")[-1])
+    # Deprecated: paginatsiya o'chirildi. Eski xabardagi tugma kelsa — xatosiz
+    # qayta render qilamiz (single-page view).
     user = await get_user(callback.from_user.id)
     if not user:
         await callback.answer()
         return
     lang = user.get("lang", "ru")
-    await _show_products_page(callback.message, callback.message, user, lang, page=page)
+    msg = await callback.message.answer(t("loading", lang), parse_mode="HTML")
+    await _show_products_page(callback.message, msg, user, lang)
     await callback.answer()
 
 
 @router.callback_query(F.data == "products_noop")
 async def products_noop(callback: CallbackQuery):
+    # Deprecated paginatsiya tugmasi — shunchaki tasdiqlaymiz.
     await callback.answer()
 
 

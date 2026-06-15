@@ -11,9 +11,11 @@ from apscheduler.triggers.interval import IntervalTrigger
 import pytz
 
 from database import get_all_users, log_notification, was_notified_today
+from database import get_sku_snapshots, save_sku_snapshots
 from services.uzum_api import (
     get_fbs_orders, get_invoices, get_returns,
-    get_products, summarize_orders, _days_ago_ms, _now_ms
+    get_products, summarize_orders, _days_ago_ms, _now_ms,
+    is_product_active, _get_sku_variant_name, calc_total_qty,
 )
 from services.storage_tracker import parse_invoices, get_storage_alerts
 from locales.i18n import t
@@ -88,6 +90,24 @@ def start_scheduler(bot) -> AsyncIOScheduler:
         IntervalTrigger(minutes=30),
         args=[bot],
         id="returns_check",
+        replace_existing=True,
+    )
+
+    # 09:00 Toshkent — Kunlik mahsulot hisoboti (digest)
+    scheduler.add_job(
+        run_product_report,
+        CronTrigger(hour=9, minute=0, timezone=TASHKENT),
+        args=[bot],
+        id="product_report_morning",
+        replace_existing=True,
+    )
+
+    # Har 5 daqiqa — Sotuv tekshiruvi (per-SKU quantity-decrease detection)
+    scheduler.add_job(
+        run_sale_check,
+        IntervalTrigger(minutes=5),
+        args=[bot],
+        id="sale_check",
         replace_existing=True,
     )
 
@@ -356,3 +376,178 @@ async def run_returns_check(bot):
 
         except Exception as e:
             logger.error(f"Returns check error for user {user['user_id']}: {e}")
+
+
+
+# ─── Kunlik mahsulot hisoboti (09:00) ─────────────────────────────────────────
+
+# Hisobotga kiritiladigan eng shoshilinch (out + low) elementlar soni chegarasi.
+PRODUCT_REPORT_MAX_ITEMS = 10
+LOW_STOCK_THRESHOLD = 5
+
+
+async def run_product_report(bot):
+    """09:00 da har bir foydalanuvchiga aktiv katalog digestini yuborish.
+
+    Kuniga bir marta (was_notified_today guard). Har bir foydalanuvchi try/except
+    ichida — bittasi xato bersa qolganlari to'xtamaydi; sendlar asyncio.sleep bilan
+    sekinlashtiriladi (Telegram rate-limit).
+    """
+    users = await get_all_users()
+    for user in users:
+        try:
+            uid = user["user_id"]
+            notif_key = "product_report"
+            if await was_notified_today(uid, notif_key):
+                continue
+
+            api_key = user["api_key"]
+            shop_id = user["shop_id"]
+            lang = user.get("lang", "ru")
+
+            products = await get_products(api_key, shop_id)
+            active = [p for p in products if is_product_active(p)]
+
+            total_active = len(active)
+            total_stock = sum(calc_total_qty(p) for p in active)
+
+            low_items = []   # qty <= 5 va > 0
+            out_items = []   # qty == 0
+            for p in active:
+                qty = calc_total_qty(p)
+                name = short_name(p.get("title") or p.get("name") or "—", 35)
+                if qty == 0:
+                    out_items.append((name, qty))
+                elif qty <= LOW_STOCK_THRESHOLD:
+                    low_items.append((name, qty))
+
+            low_count = len(low_items)
+            out_count = len(out_items)
+
+            text = (
+                t("product_report_title", lang)
+                + "\n\n"
+                + t(
+                    "product_report_body", lang,
+                    total_active=total_active, total_stock=total_stock,
+                    low_count=low_count, out_count=out_count,
+                )
+            )
+
+            # Eng shoshilinch elementlar: avval tugaganlar, keyin kam qolganlar.
+            urgent = (out_items + low_items)[:PRODUCT_REPORT_MAX_ITEMS]
+            if urgent:
+                lines = [
+                    t("product_report_item", lang, name=name, qty=qty)
+                    for name, qty in urgent
+                ]
+                text += "\n\n" + "\n".join(lines)
+
+            await bot.send_message(uid, text, parse_mode="HTML")
+            await log_notification(uid, notif_key)
+            await asyncio.sleep(0.5)
+
+        except Exception as e:
+            logger.error(f"Product report error for user {user['user_id']}: {e}")
+
+
+# ─── Sotuv tekshiruvi (per-SKU quantity-decrease detection) ───────────────────
+
+def _sku_id_of(sku: dict):
+    """Return str sku id from skuId (preferred) else id; None if neither present."""
+    sid = sku.get("skuId") or sku.get("id")
+    return str(sid) if sid is not None else None
+
+
+def build_current_map(active_products: list) -> dict:
+    """Build {sku_id (str): quantityActive (int)} over active products' SKUs.
+
+    SKUs with neither ``skuId`` nor ``id`` are skipped entirely.
+    """
+    current: dict[str, int] = {}
+    for p in active_products:
+        for sku in p.get("skuList", []) or []:
+            sid = _sku_id_of(sku)
+            if sid is None:
+                continue
+            current[sid] = int(sku.get("quantityActive") or 0)
+    return current
+
+
+def detect_sales(prev: dict, current: dict) -> list:
+    """Return [(sku_id, sold, remaining)] for SKUs whose qty strictly DECREASED.
+
+    A sale event is produced iff the sku is present in BOTH ``prev`` and ``current``
+    and ``prev[sku] > current[sku]``. New SKUs (absent from ``prev``) and
+    unchanged/increased quantities produce no event. ``sold`` is the positive delta
+    (prev - current); ``remaining`` is the current quantity.
+    """
+    sales = []
+    for sid, cur_qty in current.items():
+        if sid in prev:
+            delta = prev[sid] - cur_qty
+            if delta > 0:
+                sales.append((sid, delta, cur_qty))
+    return sales
+
+
+async def run_sale_check(bot):
+    """Har 5 daqiqada: SKU qoldiq pasayishi orqali sotuvni aniqlash va push yuborish.
+
+    Birinchi pass (snapshot bo'sh) — faqat baseline saqlanadi, push yo'q. Keyingi
+    passlarda strict decrease aniqlanadi. Har bir pass oxirida current map saqlanadi.
+    Har bir foydalanuvchi try/except ichida + asyncio.sleep bilan paced.
+    """
+    users = await get_all_users()
+    for user in users:
+        try:
+            uid = user["user_id"]
+            api_key = user["api_key"]
+            shop_id = user["shop_id"]
+            lang = user.get("lang", "ru")
+
+            products = await get_products(api_key, shop_id)
+            active = [p for p in products if is_product_active(p)]
+
+            current = build_current_map(active)
+
+            # sku_id -> (product_title, sku_dict) index — variant nomini render uchun.
+            sku_index: dict[str, tuple] = {}
+            for p in active:
+                title = p.get("title") or p.get("name") or "—"
+                for sku in p.get("skuList", []) or []:
+                    sid = _sku_id_of(sku)
+                    if sid is None:
+                        continue
+                    sku_index[sid] = (title, sku)
+
+            prev = await get_sku_snapshots(uid, shop_id)
+
+            if not prev:
+                # Birinchi pass — baseline o'rnatiladi, push yo'q.
+                await save_sku_snapshots(uid, shop_id, current)
+                await asyncio.sleep(0.3)
+                continue
+
+            sales = detect_sales(prev, current)
+            for sid, sold, remaining in sales:
+                title, sku = sku_index.get(sid, ("—", {}))
+                variant = _get_sku_variant_name(sku, lang) if sku else "—"
+                text = (
+                    t("sale_push_title", lang)
+                    + "\n\n"
+                    + t(
+                        "sale_push_item", lang,
+                        product=title, variant=variant,
+                        sold=sold, remaining=remaining,
+                    )
+                )
+                await bot.send_message(uid, text, parse_mode="HTML")
+                await asyncio.sleep(0.3)
+
+            # Har doim current snapshotni saqlaymiz.
+            await save_sku_snapshots(uid, shop_id, current)
+            await asyncio.sleep(0.3)
+
+        except Exception as e:
+            logger.error(f"Sale check error for user {user['user_id']}: {e}")

@@ -119,6 +119,47 @@ async def get_products(api_key: str, shop_id: int) -> list[dict]:
     return products
 
 
+ARCHIVED_STATUSES = {
+    "ARCHIVED", "ARCHIVE", "INACTIVE", "DELETED", "HIDDEN", "MODERATION_FAILED",
+}
+
+
+def is_product_active(p: dict) -> bool:
+    """Return False for archived/inactive products, True otherwise (fail-open default).
+
+    Defensive multi-field check. Uzum's product payload is not fully documented for
+    the archived/inactive case, so the inspected field set below is a defensive
+    superset. Once real archived-product payloads are observed in logs, this set may
+    need tuning (narrow or extend). Defaulting to True ensures the view never *hides*
+    a product we are unsure about (fail-open for visibility).
+
+    A product is considered INACTIVE when any of these decisive signals is present:
+      - ``status`` or ``productStatus`` (``.strip().upper()``) is in ``ARCHIVED_STATUSES``
+      - ``archived`` is ``True``
+      - ``isArchived`` is ``True``
+      - ``active`` is ``False``
+      - ``isActive`` is ``False``
+    Otherwise the product is considered ACTIVE.
+    """
+    # 1) String status fields (case-insensitive)
+    for field in ("status", "productStatus"):
+        val = p.get(field)
+        if isinstance(val, str) and val.strip().upper() in ARCHIVED_STATUSES:
+            return False
+    # 2) Boolean archived flags
+    if p.get("archived") is True:
+        return False
+    if p.get("isArchived") is True:
+        return False
+    # 3) Boolean active flags (explicit False only)
+    if p.get("active") is False:
+        return False
+    if p.get("isActive") is False:
+        return False
+    # 4) Default: assume active (fail-open)
+    return True
+
+
 def calc_total_qty(product: dict) -> int:
     return sum(int(s.get("quantityActive") or 0) for s in product.get("skuList", []))
 

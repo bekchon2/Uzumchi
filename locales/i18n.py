@@ -484,6 +484,50 @@ TEXTS = {
         "uz": "📊 Rentabellik: <b>{margin:.1f}%</b>",
         "ru": "📊 Рентабельность: <b>{margin:.1f}%</b>",
     },
+
+    # ── Daily product report (09:00 digest) ───────────────────────────────────
+    "product_report_title": {
+        "uz": "🌅 <b>Kunlik mahsulot hisoboti</b>",
+        "ru": "🌅 <b>Ежедневный отчёт по товарам</b>",
+    },
+    "product_report_body": {
+        "uz": (
+            "📦 Aktiv mahsulotlar: <b>{total_active}</b> ta\n"
+            "📊 Umumiy qoldiq: <b>{total_stock}</b> dona\n"
+            "⚠️ Kam qolgan: <b>{low_count}</b> ta\n"
+            "🚫 Tugagan: <b>{out_count}</b> ta"
+        ),
+        "ru": (
+            "📦 Активных товаров: <b>{total_active}</b> шт.\n"
+            "📊 Общий остаток: <b>{total_stock}</b> шт.\n"
+            "⚠️ Мало осталось: <b>{low_count}</b> шт.\n"
+            "🚫 Закончились: <b>{out_count}</b> шт."
+        ),
+    },
+    "product_report_item": {
+        "uz": "• {name}: <b>{qty}</b> dona",
+        "ru": "• {name}: <b>{qty}</b> шт.",
+    },
+
+    # ── Per-sale push (quantity-decrease detection) ───────────────────────────
+    "sale_push_title": {
+        "uz": "🔔 <b>Yangi sotuv!</b>",
+        "ru": "🔔 <b>Новая продажа!</b>",
+    },
+    "sale_push_item": {
+        "uz": (
+            "📦 <b>{product}</b>\n"
+            "🎨 Variant: {variant}\n"
+            "🛒 Sotildi: <b>{sold}</b> dona\n"
+            "📊 Qoldiq: <b>{remaining}</b> dona"
+        ),
+        "ru": (
+            "📦 <b>{product}</b>\n"
+            "🎨 Вариант: {variant}\n"
+            "🛒 Продано: <b>{sold}</b> шт.\n"
+            "📊 Остаток: <b>{remaining}</b> шт."
+        ),
+    },
 }
 
 
