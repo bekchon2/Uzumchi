@@ -32,67 +32,6 @@ _seen_delivered: dict[int, set] = {}  # user_id → set of order_ids
 def start_scheduler(bot) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(timezone=TASHKENT)
 
-    # 08:00 Toshkent — Ertalabki hisobot
-    scheduler.add_job(
-        run_morning_reports,
-        CronTrigger(hour=8, minute=0, timezone=TASHKENT),
-        args=[bot],
-        id="morning_reports",
-        replace_existing=True,
-    )
-
-    # Har 4 soat — Ombor ogohlantirishlari
-    scheduler.add_job(
-        run_storage_alerts,
-        IntervalTrigger(hours=4),
-        args=[bot],
-        id="storage_alerts",
-        replace_existing=True,
-    )
-
-    # Har 10 daqiqa — Delivered tekshiruv
-    scheduler.add_job(
-        run_delivered_check,
-        IntervalTrigger(minutes=10),
-        args=[bot],
-        id="delivered_check",
-        replace_existing=True,
-    )
-
-    # 09:00 va 18:00 — Reyting tekshiruv
-    scheduler.add_job(
-        run_rating_check,
-        CronTrigger(hour=9, minute=0, timezone=TASHKENT),
-        args=[bot],
-        id="rating_check_morning",
-        replace_existing=True,
-    )
-    scheduler.add_job(
-        run_rating_check,
-        CronTrigger(hour=18, minute=0, timezone=TASHKENT),
-        args=[bot],
-        id="rating_check_evening",
-        replace_existing=True,
-    )
-
-    # 09:30 — Tovar tugash prognozi
-    scheduler.add_job(
-        run_forecast_check,
-        CronTrigger(hour=9, minute=30, timezone=TASHKENT),
-        args=[bot],
-        id="forecast_check",
-        replace_existing=True,
-    )
-
-    # Har 30 daqiqa — Yangi qaytarmalar
-    scheduler.add_job(
-        run_returns_check,
-        IntervalTrigger(minutes=30),
-        args=[bot],
-        id="returns_check",
-        replace_existing=True,
-    )
-
     # 09:00 Toshkent — Kunlik mahsulot hisoboti (digest)
     scheduler.add_job(
         run_product_report,
