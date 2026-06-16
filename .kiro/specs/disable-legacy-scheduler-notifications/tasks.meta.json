@@ -1,0 +1,10 @@
+{
+  "pbtResults": {
+    "1. Write bug condition exploration test (legacy jobs must NOT be registered)": {
+      "status": "passed",
+      "failingExample": "On UNFIXED code, scheduler.get_job('returns_check') returned <Job (id=returns_check name=run_returns_check)> instead of None (same for the other six legacy ids: morning_reports, storage_alerts, delivered_check, rating_check_morning, rating_check_evening, forecast_check). scheduler.get_jobs() returned 9 jobs instead of 2. This confirms the bug: the seven legacy add_job(...) calls in start_scheduler register jobs that would fire.",
+      "lastRunTimestamp": 1781588687277
+    }
+  },
+  "executionHistory": {}
+}
