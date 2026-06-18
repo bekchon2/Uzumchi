@@ -302,6 +302,45 @@ TEXTS = {
     },
 
     # ── Buttons ───────────────────────────────────────────────────────────────
+    # ── Missing reports ───────────────────────────────────────────────────────
+    "missing_title": {
+        "uz": "📦 <b>Yo'qolgan tovarlar hisoboti</b>",
+        "ru": "📦 <b>Отчёт по потерянным товарам</b>",
+    },
+    "missing_body": {
+        "uz": (
+            "Do'koningiz: <b>JoyKid</b>\n"
+            "Ombor: <b>FBO</b>\n\n"
+            "🔍 <b>Yo'qolgan tovarlar:</b>\n"
+            "• Детский парашют — <b>2 dona</b> | 💰 29,848 so'm\n\n"
+            "📊 <b>Jami:</b> 2 dona | 29,848 so'm\n\n"
+            "📥 Kompensatsiya uchun hujjatlarni ZIP formatda yuklab oling:"
+        ),
+        "ru": (
+            "Магазин: <b>JoyKid</b>\n"
+            "Склад: <b>FBO</b>\n\n"
+            "🔍 <b>Потерянные товары:</b>\n"
+            "• Детский парашют — <b>2 шт.</b> | 💰 29,848 сум\n\n"
+            "📊 <b>Итого:</b> 2 шт. | 29,848 сум\n\n"
+            "📥 Скачайте документы для компенсации в формате ZIP:"
+        ),
+    },
+    "missing_zip_caption": {
+        "uz": (
+            "📦 <b>Yo'qolgan tovarlar — kompensatsiya hujjatlari</b>\n\n"
+            "📄 <code>Доп-соглашение-422955.docx</code>\n"
+            "📊 <code>отчет-потерянных-товаров.xlsx</code>\n\n"
+            "💡 Shu fayllarni Uzum ga yuboring va kompensatsiya talab qiling."
+        ),
+        "ru": (
+            "📦 <b>Потерянные товары — документы для компенсации</b>\n\n"
+            "📄 <code>Доп-соглашение-422955.docx</code>\n"
+            "📊 <code>отчет-потерянных-товаров.xlsx</code>\n\n"
+            "💡 Отправьте эти файлы в Uzum для получения компенсации."
+        ),
+    },
+
+    "btn_missing": {"uz": "📦 Yo'qolgan tovarlar", "ru": "📦 Потерянные товары"},
     "btn_products": {"uz": "📦 Mahsulotlarim", "ru": "📦 Мои товары"},
     "btn_orders": {"uz": "🛒 Buyurtmalar", "ru": "🛒 Заказы"},
     "btn_storage": {"uz": "🏭 Ombor", "ru": "🏭 Склад"},

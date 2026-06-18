@@ -11,6 +11,7 @@ from database import init_db
 from handlers.start import router as start_router
 from handlers.analytics import router as analytics_router
 from handlers.main_menu import router as main_menu_router
+from handlers.missing_reports import router as missing_router
 from services.scheduler import start_scheduler
 
 load_dotenv()
@@ -68,10 +69,11 @@ async def main():
     storage = MemoryStorage()
     dp = Dispatcher(storage=storage)
 
-    # Router tartib muhim: analytics → start → main_menu
+    # Router tartib muhim: analytics → start → main_menu → missing
     dp.include_router(analytics_router)
     dp.include_router(start_router)
     dp.include_router(main_menu_router)
+    dp.include_router(missing_router)
 
     # APScheduler ishga tushirish
     scheduler = start_scheduler(bot)
