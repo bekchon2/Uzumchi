@@ -95,6 +95,26 @@ async def init_db():
         except Exception:
             pass
 
+        # Yo'qolgan tovarlar forma ma'lumotlari (har foydalanuvchi uchun saqlash)
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS missing_report_forms (
+                user_id          INTEGER PRIMARY KEY,
+                report_date      TEXT DEFAULT '',
+                director_name    TEXT DEFAULT '',
+                org_name         TEXT DEFAULT '',
+                reg_number       TEXT DEFAULT '',
+                inn              TEXT DEFAULT '',
+                address          TEXT DEFAULT '',
+                contract_number  TEXT DEFAULT '',
+                contract_date    TEXT DEFAULT '',
+                bank_name        TEXT DEFAULT '',
+                account_number   TEXT DEFAULT '',
+                bank_mfo         TEXT DEFAULT '',
+                updated_at       INTEGER DEFAULT (strftime('%s','now'))
+            )
+        """)
+        await db.commit()
+
     logger.info(f"Database initialized: {DB_PATH}")
 
 
@@ -302,4 +322,57 @@ async def save_sku_snapshots(user_id: int, shop_id: int, mapping: dict):
             """,
             [(user_id, shop_id, str(sku_id), int(qty)) for sku_id, qty in mapping.items()],
         )
+        await db.commit()
+
+
+
+# ─── Missing report forms ─────────────────────────────────────────────────────
+
+async def get_missing_report_form(user_id: int) -> dict | None:
+    """Foydalanuvchining saqlangan forma ma'lumotlarini olish."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT * FROM missing_report_forms WHERE user_id = ?", (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+
+async def save_missing_report_form(user_id: int, data: dict):
+    """Forma ma'lumotlarini saqlash yoki yangilash."""
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute("""
+            INSERT INTO missing_report_forms
+                (user_id, report_date, director_name, org_name, reg_number,
+                 inn, address, contract_number, contract_date,
+                 bank_name, account_number, bank_mfo, updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?, strftime('%s','now'))
+            ON CONFLICT(user_id) DO UPDATE SET
+                report_date     = excluded.report_date,
+                director_name   = excluded.director_name,
+                org_name        = excluded.org_name,
+                reg_number      = excluded.reg_number,
+                inn             = excluded.inn,
+                address         = excluded.address,
+                contract_number = excluded.contract_number,
+                contract_date   = excluded.contract_date,
+                bank_name       = excluded.bank_name,
+                account_number  = excluded.account_number,
+                bank_mfo        = excluded.bank_mfo,
+                updated_at      = strftime('%s','now')
+        """, (
+            user_id,
+            data.get("report_date", ""),
+            data.get("director_name", ""),
+            data.get("org_name", ""),
+            data.get("reg_number", ""),
+            data.get("inn", ""),
+            data.get("address", ""),
+            data.get("contract_number", ""),
+            data.get("contract_date", ""),
+            data.get("bank_name", ""),
+            data.get("account_number", ""),
+            data.get("bank_mfo", ""),
+        ))
         await db.commit()
