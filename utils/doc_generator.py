@@ -29,7 +29,7 @@ def generate_xlsx(form: dict, items: list) -> io.BytesIO:
     try:
         import openpyxl
         from openpyxl.styles import (
-            Font, PatternFill, Alignment, Border, Side, numbers
+            Font, PatternFill, Alignment, Border, Side
         )
         from openpyxl.utils import get_column_letter
     except ImportError as e:
