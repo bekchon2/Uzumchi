@@ -1,14 +1,15 @@
 """
 handlers/missing_reports.py
 ===========================
-📦 Yo'qolgan tovarlar — to'liq FSM forma + ZIP generatsiya.
+Yo'qolgan tovarlar — qo'lda kiritish + ZIP generatsiya.
 
 Flow:
-  1. Tugma → real yo'qolgan tovarlar API dan olinadi
-  2. Ro'yxat + "Hisobotni shakllantirish" tugmasi
-  3. Agar avval saqlangan ma'lumotlar bo'lsa → "Ishlatish / Qayta kiritish"
-  4. Yo'q bo'lsa → birma-bir 11 ta maydon so'raladi
-  5. Tasdiqlash → ZIP (xlsx + docx) → foydalanuvchiga yuboriladi
+  1. "📦 Yo'qolgan tovarlar" tugmasi
+  2. Avvalgi saqlangan firma ma'lumotlari bormi? → Ha/Yo'q
+  3. 11 ta firma maydoni (yoki saqlanganlari ishlatiladi)
+  4. Tovarlarni qo'lda kiritish:
+     - Tovar nomi → miqdor → narx → yana tovar? → Yo'q
+  5. Tasdiqlash → ZIP (xlsx + docx) → yuboriladi
 """
 import logging
 from datetime import datetime
@@ -16,25 +17,23 @@ from datetime import datetime
 from aiogram import Router, F, Bot
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import (
-    Message, CallbackQuery, BufferedInputFile,
-)
+from aiogram.types import Message, CallbackQuery, BufferedInputFile
 from aiogram.utils.keyboard import InlineKeyboardBuilder, ReplyKeyboardBuilder
 
 from database import get_user, get_missing_report_form, save_missing_report_form
-from services.missing_service import find_missing_products, format_missing_list
 from utils.doc_generator import create_zip
 from utils.keyboards import main_menu_keyboard
 from locales.i18n import t
+from services.missing_service import MissingItem, format_missing_list
 
 logger = logging.getLogger(__name__)
 router = Router()
 
 
-
 # ─── FSM States ───────────────────────────────────────────────────────────────
 
 class MissingForm(StatesGroup):
+    # Firma ma'lumotlari (11 ta)
     report_date     = State()
     director_name   = State()
     org_name        = State()
@@ -46,26 +45,32 @@ class MissingForm(StatesGroup):
     bank_name       = State()
     account_number  = State()
     bank_mfo        = State()
+    # Tovar kiritish
+    item_name       = State()
+    item_qty        = State()
+    item_price      = State()
+    # Tasdiqlash
     confirm         = State()
 
 
-# Maydon tartib va meta
+# Firma maydonlari
 FIELDS = [
-    ("report_date",     "📅 Hisobot sanasi",        "Дата отчёта",         "2026-06-18"),
-    ("director_name",   "👤 Rahbarning F.I.Sh.",    "Ф.И.О. руководителя","YAKUBOVA DILRABO KAMILJONOVNA"),
-    ("org_name",        "🏢 Tashkilot nomi",        "Наименование орг.",   "ИП YAKUBOVA DILRABO KAMILJONOVNA"),
-    ("reg_number",      "🗂 ЯТТ / Reg. raqam",      "Рег. номер (ЯТТ)",   "6691547"),
-    ("inn",             "🔢 INN / ЖШШИР",           "ИНН / ЖШШИР",        "41507933180159"),
-    ("address",         "📍 Manzil",                "Юридический адрес",   "Viloyat, tuman, ko'cha, uy"),
-    ("contract_number", "📝 Shartnoma raqami",       "Номер договора",      "0432955н"),
-    ("contract_date",   "📆 Shartnoma sanasi",       "Дата договора",       "2026-05-15"),
-    ("bank_name",       "🏦 Bank nomi",             "Название банка",      "Kapitalbank"),
-    ("account_number",  "💳 Hisob raqami",          "Расчётный счёт",      "20218000000074682298"),
-    ("bank_mfo",        "🏷 Bank MFO",              "МФО банка",           "01158"),
+    ("report_date",     "📅 Hisobot sanasi",        "Дата отчёта",              "2026-06-19"),
+    ("director_name",   "👤 Rahbarning F.I.Sh.",    "Ф.И.О. руководителя",     "YAKUBOVA DILRABO KAMILJONOVNA"),
+    ("org_name",        "🏢 Tashkilot nomi",        "Наименование орг.",        "ИП YAKUBOVA DILRABO KAMILJONOVNA"),
+    ("reg_number",      "🗂 ЯТТ / Reg. raqam",      "Рег. номер (ЯТТ)",        "6691547"),
+    ("inn",             "🔢 INN / ЖШШИР",           "ИНН / ЖШШИР",             "41507933180159"),
+    ("address",         "📍 Manzil",                "Юридический адрес",        "Viloyat, tuman, ko'cha, uy"),
+    ("contract_number", "📝 Shartnoma raqami",       "Номер договора",           "0432955н"),
+    ("contract_date",   "📆 Shartnoma sanasi",       "Дата договора",            "2026-05-15"),
+    ("bank_name",       "🏦 Bank nomi",             "Название банка",           "Kapitalbank"),
+    ("account_number",  "💳 Hisob raqami",          "Расчётный счёт",           "20218000000074682298"),
+    ("bank_mfo",        "🏷 Bank MFO",              "МФО банка",                "01158"),
 ]
 
 FIELD_KEYS = [f[0] for f in FIELDS]
-STATE_MAP  = {
+
+STATE_MAP = {
     "report_date":     MissingForm.report_date,
     "director_name":   MissingForm.director_name,
     "org_name":        MissingForm.org_name,
@@ -80,264 +85,256 @@ STATE_MAP  = {
 }
 
 
-
 # ─── Klaviaturalar ────────────────────────────────────────────────────────────
 
-def _field_keyboard(lang: str, has_saved: bool):
-    """Har bir maydon uchun klaviatura."""
+def _cancel_kb(lang: str):
+    builder = ReplyKeyboardBuilder()
+    builder.button(text="❌ Bekor qilish" if lang == "uz" else "❌ Отмена")
+    return builder.as_markup(resize_keyboard=True)
+
+
+def _field_kb(lang: str, has_saved: bool):
     builder = ReplyKeyboardBuilder()
     if has_saved:
-        skip = "↩️ Saqlanganini qoldirish" if lang == "uz" else "↩️ Оставить сохранённое"
-        builder.button(text=skip)
-    cancel = "❌ Bekor qilish" if lang == "uz" else "❌ Отмена"
-    builder.button(text=cancel)
+        builder.button(text="↩️ Saqlanganini qoldirish" if lang == "uz" else "↩️ Оставить сохранённое")
+    builder.button(text="❌ Bekor qilish" if lang == "uz" else "❌ Отмена")
     builder.adjust(1)
     return builder.as_markup(resize_keyboard=True)
 
 
-def _confirm_keyboard(lang: str):
+def _use_saved_kb(lang: str):
     builder = InlineKeyboardBuilder()
-    ok  = "✅ Tasdiqlash va ZIP olish" if lang == "uz" else "✅ Подтвердить и получить ZIP"
-    redo = "✏️ Qayta kiritish"          if lang == "uz" else "✏️ Перезаполнить"
-    builder.button(text=ok,   callback_data="missing_confirm_yes")
-    builder.button(text=redo, callback_data="missing_confirm_redo")
+    builder.button(
+        text="✅ Ha, shu ma'lumotlar" if lang == "uz" else "✅ Да, использовать",
+        callback_data="missing_use_saved_yes"
+    )
+    builder.button(
+        text="✏️ Qayta kiritaman" if lang == "uz" else "✏️ Заполнить заново",
+        callback_data="missing_use_saved_no"
+    )
     builder.adjust(1)
     return builder.as_markup()
 
 
-def _use_saved_keyboard(lang: str):
+def _more_items_kb(lang: str):
     builder = InlineKeyboardBuilder()
-    yes = "✅ Ha, shu ma'lumotlar bilan" if lang == "uz" else "✅ Да, использовать сохранённые"
-    no  = "✏️ Yo'q, qayta kiritaman"    if lang == "uz" else "✏️ Нет, заполнить заново"
-    builder.button(text=yes, callback_data="missing_use_saved_yes")
-    builder.button(text=no,  callback_data="missing_use_saved_no")
+    builder.button(
+        text="➕ Yana tovar qo'shish" if lang == "uz" else "➕ Добавить ещё товар",
+        callback_data="missing_add_more"
+    )
+    builder.button(
+        text="✅ Tayyor, hujjat tayyorla" if lang == "uz" else "✅ Готово, сформировать",
+        callback_data="missing_items_done"
+    )
     builder.adjust(1)
     return builder.as_markup()
 
 
-def _missing_list_keyboard(lang: str):
+def _confirm_kb(lang: str):
     builder = InlineKeyboardBuilder()
-    build = "📋 Hisobotni shakllantirish" if lang == "uz" else "📋 Сформировать отчёт"
-    ref   = "🔄 Yangilash"               if lang == "uz" else "🔄 Обновить"
-    builder.button(text=build, callback_data="missing_start_form")
-    builder.button(text=ref,   callback_data="missing_refresh")
+    builder.button(
+        text="✅ Tasdiqlash va ZIP olish" if lang == "uz" else "✅ Подтвердить и получить ZIP",
+        callback_data="missing_confirm_yes"
+    )
+    builder.button(
+        text="✏️ Tovarlarni qayta kiritish" if lang == "uz" else "✏️ Переввести товары",
+        callback_data="missing_redo_items"
+    )
+    builder.button(
+        text="🔄 Firma ma'lumotlarini o'zgartirish" if lang == "uz" else "🔄 Изменить данные фирмы",
+        callback_data="missing_redo_form"
+    )
     builder.adjust(1)
     return builder.as_markup()
-
 
 
 # ─── Yordamchi funksiyalar ────────────────────────────────────────────────────
 
 def _saved_summary(saved: dict, lang: str) -> str:
-    """Saqlangan ma'lumotlarni ko'rsatish matni."""
-    lines = []
-    if lang == "uz":
-        lines.append("💾 <b>Saqlangan ma'lumotlar:</b>")
-    else:
-        lines.append("💾 <b>Сохранённые данные:</b>")
+    lines = ["💾 <b>Saqlangan ma'lumotlar:</b>" if lang == "uz" else "💾 <b>Сохранённые данные:</b>"]
     for key, lbl_uz, lbl_ru, _ in FIELDS:
-        val = saved.get(key, "") or "—"
+        val = saved.get(key) or "—"
         lbl = lbl_uz if lang == "uz" else lbl_ru
         lines.append(f"  <b>{lbl}:</b> {val}")
     return "\n".join(lines)
 
 
-def _form_summary(form: dict, lang: str) -> str:
-    """To'ldirilgan forma xulosasi."""
+def _items_summary(items: list[dict], lang: str) -> str:
+    if not items:
+        return "—"
     lines = []
-    if lang == "uz":
-        lines.append("📋 <b>To'ldirilgan ma'lumotlar:</b>")
-    else:
-        lines.append("📋 <b>Заполненные данные:</b>")
-    for key, lbl_uz, lbl_ru, _ in FIELDS:
-        val = form.get(key, "") or "—"
-        lbl = lbl_uz if lang == "uz" else lbl_ru
-        lines.append(f"  ✅ <b>{lbl}:</b> {val}")
-    return "\n".join(lines)
+    total_comp = 0.0
+    for i, item in enumerate(items, 1):
+        comp = item["qty"] * item["price"]
+        total_comp += comp
+        if lang == "uz":
+            lines.append(
+                f"{i}. <b>{item['name'][:50]}</b>\n"
+                f"   {item['qty']} dona × {item['price']:,.0f} = <b>{comp:,.0f} so'm</b>"
+            )
+        else:
+            lines.append(
+                f"{i}. <b>{item['name'][:50]}</b>\n"
+                f"   {item['qty']} шт. × {item['price']:,.0f} = <b>{comp:,.0f} сум</b>"
+            )
+    sep = "─" * 28
+    total_lbl = f"💰 Jami: <b>{total_comp:,.0f} so'm</b>" if lang == "uz" \
+                else f"💰 Итого: <b>{total_comp:,.0f} сум</b>"
+    return "\n".join(lines) + f"\n{sep}\n{total_lbl}"
 
 
-async def _ask_field(message_or_callback, state: FSMContext,
-                     field_idx: int, lang: str, saved: dict | None):
-    """Keyingi maydonni so'rash."""
-    key, lbl_uz, lbl_ru, example = FIELDS[field_idx]
-    lbl     = lbl_uz if lang == "uz" else lbl_ru
+async def _ask_field(target, state: FSMContext, idx: int, lang: str, saved: dict | None):
+    key, lbl_uz, lbl_ru, example = FIELDS[idx]
+    lbl = lbl_uz if lang == "uz" else lbl_ru
     saved_v = (saved or {}).get(key, "")
 
-    if lang == "uz":
-        text = f"<b>{field_idx + 1}/{len(FIELDS)}. {lbl}:</b>"
-        if saved_v:
-            text += f"\n💾 Avvalgi: <code>{saved_v}</code>"
-        text += f"\n📌 Namuna: <i>{example}</i>"
-    else:
-        text = f"<b>{field_idx + 1}/{len(FIELDS)}. {lbl}:</b>"
-        if saved_v:
-            text += f"\n💾 Предыдущее: <code>{saved_v}</code>"
-        text += f"\n📌 Пример: <i>{example}</i>"
+    text = f"<b>{idx + 1}/{len(FIELDS)}. {lbl}:</b>"
+    if saved_v:
+        text += f"\n💾 {'Avvalgi' if lang == 'uz' else 'Предыдущее'}: <code>{saved_v}</code>"
+    text += f"\n📌 {'Namuna' if lang == 'uz' else 'Пример'}: <i>{example}</i>"
 
-    kb = _field_keyboard(lang, bool(saved_v))
     await state.set_state(STATE_MAP[key])
+    kb = _field_kb(lang, bool(saved_v))
 
-    if isinstance(message_or_callback, Message):
-        await message_or_callback.answer(text, reply_markup=kb, parse_mode="HTML")
+    msg = target if isinstance(target, Message) else target.message
+    await msg.answer(text, reply_markup=kb, parse_mode="HTML")
+
+
+async def _start_item_entry(target, state: FSMContext, lang: str):
+    """Tovar kiritishni boshlash."""
+    await state.set_state(MissingForm.item_name)
+    text = (
+        "📦 <b>Yo'qolgan tovarni kiriting</b>\n\n"
+        "Tovar nomini yozing:\n"
+        "<i>Masalan: Детский игрушечный парашют...</i>"
+        if lang == "uz" else
+        "📦 <b>Введите потерянный товар</b>\n\n"
+        "Напишите название товара:\n"
+        "<i>Например: Детский игрушечный парашют...</i>"
+    )
+    msg = target if isinstance(target, Message) else target.message
+    await msg.answer(text, reply_markup=_cancel_kb(lang), parse_mode="HTML")
+
+
+async def _go_to_confirm(target, state: FSMContext, lang: str, form: dict, items: list):
+    """Tasdiqlash sahifasini ko'rsatish."""
+    await state.set_state(MissingForm.confirm)
+
+    items_text = _items_summary(items, lang)
+    total_qty  = sum(i["qty"] for i in items)
+    total_comp = sum(i["qty"] * i["price"] for i in items)
+
+    if lang == "uz":
+        text = (
+            f"📋 <b>Tasdiqlash</b>\n\n"
+            f"🏢 <b>Firma:</b> {form.get('org_name', '—')}\n"
+            f"📅 <b>Sana:</b> {form.get('report_date', '—')}\n"
+            f"📝 <b>Shartnoma:</b> №{form.get('contract_number', '—')}\n\n"
+            f"📦 <b>Yo'qolgan tovarlar:</b>\n{items_text}\n\n"
+            f"📊 Jami: <b>{total_qty} dona</b>\n"
+            f"💰 Kompensatsiya: <b>{total_comp:,.0f} so'm</b>\n\n"
+            f"❓ Ma'lumotlar to'g'rimi?"
+        )
     else:
-        await message_or_callback.message.answer(text, reply_markup=kb, parse_mode="HTML")
+        text = (
+            f"📋 <b>Подтверждение</b>\n\n"
+            f"🏢 <b>Фирма:</b> {form.get('org_name', '—')}\n"
+            f"📅 <b>Дата:</b> {form.get('report_date', '—')}\n"
+            f"📝 <b>Договор:</b> №{form.get('contract_number', '—')}\n\n"
+            f"📦 <b>Потерянные товары:</b>\n{items_text}\n\n"
+            f"📊 Итого: <b>{total_qty} шт.</b>\n"
+            f"💰 Компенсация: <b>{total_comp:,.0f} сум</b>\n\n"
+            f"❓ Данные верны?"
+        )
+
+    msg = target if isinstance(target, Message) else target.message
+    await msg.answer(text, reply_markup=_confirm_kb(lang), parse_mode="HTML")
 
 
-
-# ─── Asosiy handler: tugma bosilganda ─────────────────────────────────────────
+# ─── Asosiy kirish nuqtasi ────────────────────────────────────────────────────
 
 @router.message(F.text.in_(["📦 Yo'qolgan tovarlar", "📦 Потерянные товары"]))
 async def cmd_missing(message: Message, state: FSMContext):
     await state.clear()
     user = await get_user(message.from_user.id)
-    if not user or not user.get("api_key"):
+    if not user:
         await message.answer("⚠️ Avval /start bilan botni sozlang.")
         return
-    lang     = user.get("lang", "ru")
-    shop_id  = user.get("shop_id", 0)
-    shop_name = user.get("shop_name", "—")
 
-    loading = "⏳ Yo'qolgan tovarlar hisoblanmoqda..." if lang == "uz" \
-              else "⏳ Рассчитываю потерянные товары..."
-    msg = await message.answer(loading)
-
-    try:
-        items = await find_missing_products(user["api_key"], shop_id)
-    except Exception as e:
-        logger.error(f"find_missing_products: {e}")
-        items = []
-
-    # Natijani state ga saqlaymiz (forma uchun kerak)
-    await state.update_data(
-        missing_items=[vars(i) for i in items],
-        lang=lang,
-        shop_name=shop_name,
-    )
-
-    text = format_missing_list(items, lang, shop_name)
-    await msg.edit_text(text, parse_mode="HTML",
-                        reply_markup=_missing_list_keyboard(lang))
-
-
-@router.callback_query(F.data == "missing_refresh")
-async def missing_refresh(callback: CallbackQuery, state: FSMContext):
-    await state.clear()
-    user = await get_user(callback.from_user.id)
-    if not user:
-        await callback.answer("⚠️ /start")
-        return
     lang      = user.get("lang", "ru")
-    shop_id   = user.get("shop_id", 0)
-    shop_name = user.get("shop_name", "—")
+    shop_name = user.get("shop_name", "JoyKid")
+    saved     = await get_missing_report_form(message.from_user.id)
 
-    await callback.answer(
-        "🔄 Yangilanmoqda..." if lang == "uz" else "🔄 Обновляю..."
-    )
-    try:
-        items = await find_missing_products(user["api_key"], shop_id)
-    except Exception as e:
-        items = []
-    await state.update_data(
-        missing_items=[vars(i) for i in items],
-        lang=lang, shop_name=shop_name,
-    )
-    text = format_missing_list(items, lang, shop_name)
-    await callback.message.edit_text(text, parse_mode="HTML",
-                                     reply_markup=_missing_list_keyboard(lang))
-
-
-
-# ─── Forma boshlash ───────────────────────────────────────────────────────────
-
-@router.callback_query(F.data == "missing_start_form")
-async def missing_start_form(callback: CallbackQuery, state: FSMContext):
-    user  = await get_user(callback.from_user.id)
-    lang  = user.get("lang", "ru") if user else "ru"
-    saved = await get_missing_report_form(callback.from_user.id)
-
-    data = await state.get_data()
-    if "missing_items" not in data:
-        await state.update_data(lang=lang)
+    await state.update_data(lang=lang, shop_name=shop_name, items=[])
 
     if saved and any(saved.get(k) for k in FIELD_KEYS):
-        # Saqlangan ma'lumotlar bor — foydalanuvchiga ko'rsatamiz
         text = _saved_summary(saved, lang)
-        q = ("\n\n❓ Shu ma'lumotlardan foydalanishni xohlaysizmi?"
-             if lang == "uz" else
-             "\n\n❓ Использовать эти сохранённые данные?")
-        await callback.message.answer(
-            text + q, parse_mode="HTML",
-            reply_markup=_use_saved_keyboard(lang)
-        )
+        q = ("\n\n❓ Shu ma'lumotlardan foydalanasizmi?" if lang == "uz"
+             else "\n\n❓ Использовать эти сохранённые данные?")
+        await message.answer(text + q, reply_markup=_use_saved_kb(lang), parse_mode="HTML")
     else:
-        # Birinchi marta — to'g'ridan so'rash
-        await state.update_data(form={}, field_idx=0, saved=None)
-        await callback.message.answer(
-            "📝 Ma'lumotlarni birma-bir kiritamiz:"
+        intro = (
+            "📝 <b>Yo'qolgan tovarlar hujjati</b>\n\n"
+            "Avval firma ma'lumotlarini kiritamiz (11 ta maydon).\n"
+            "Keyingi safar qayta kiritish shart emas — saqlanadi. 💾"
             if lang == "uz" else
-            "📝 Заполняем данные по одному:",
-            parse_mode="HTML"
+            "📝 <b>Документ по потерянным товарам</b>\n\n"
+            "Сначала введём данные фирмы (11 полей).\n"
+            "В следующий раз вводить заново не нужно — сохранится. 💾"
         )
-        await _ask_field(callback, state, 0, lang, None)
-    await callback.answer()
+        await message.answer(intro, parse_mode="HTML")
+        await state.update_data(form={}, field_idx=0, saved=None)
+        await _ask_field(message, state, 0, lang, None)
 
+
+# ─── Saqlangan ma'lumotlar ────────────────────────────────────────────────────
 
 @router.callback_query(F.data == "missing_use_saved_yes")
-async def use_saved_yes(callback: CallbackQuery, state: FSMContext):
-    """Saqlangan ma'lumotlar bilan davom etish → to'g'ri confirm ga o'tish."""
-    user  = await get_user(callback.from_user.id)
+async def use_saved_yes(call: CallbackQuery, state: FSMContext):
+    user  = await get_user(call.from_user.id)
     lang  = user.get("lang", "ru") if user else "ru"
-    saved = await get_missing_report_form(callback.from_user.id)
+    saved = await get_missing_report_form(call.from_user.id)
     form  = {k: (saved.get(k) or "") for k in FIELD_KEYS}
 
     await state.update_data(form=form, field_idx=len(FIELDS))
-    await _show_confirm(callback.message, state, lang, form)
-    await callback.answer()
+    await call.answer()
+    await _start_item_entry(call, state, lang)
 
 
 @router.callback_query(F.data == "missing_use_saved_no")
-async def use_saved_no(callback: CallbackQuery, state: FSMContext):
-    """Qayta to'ldirish."""
-    user  = await get_user(callback.from_user.id)
+async def use_saved_no(call: CallbackQuery, state: FSMContext):
+    user  = await get_user(call.from_user.id)
     lang  = user.get("lang", "ru") if user else "ru"
-    saved = await get_missing_report_form(callback.from_user.id)
+    saved = await get_missing_report_form(call.from_user.id)
+
     await state.update_data(form={}, field_idx=0, saved=saved)
-    await callback.message.answer(
-        "📝 Yangi ma'lumotlarni kiritamiz:" if lang == "uz"
-        else "📝 Вводим новые данные:",
-        parse_mode="HTML"
-    )
-    await _ask_field(callback, state, 0, lang, saved)
-    await callback.answer()
+    await call.answer()
+    await _ask_field(call, state, 0, lang, saved)
 
 
-
-# ─── Universal maydon handler ─────────────────────────────────────────────────
+# ─── Firma maydonlari ─────────────────────────────────────────────────────────
 
 async def _process_field(message: Message, state: FSMContext, field_key: str):
-    """Har bir maydon uchun umumiy qayta ishlash."""
     data  = await state.get_data()
     lang  = data.get("lang", "ru")
     form  = data.get("form", {})
     saved = data.get("saved")
     idx   = data.get("field_idx", 0)
 
-    cancel_txt = "❌ Bekor qilish" if lang == "uz" else "❌ Отмена"
-    skip_txt   = "↩️ Saqlanganini qoldirish" if lang == "uz" else "↩️ Оставить сохранённое"
+    cancel = "❌ Bekor qilish" if lang == "uz" else "❌ Отмена"
+    skip   = "↩️ Saqlanganini qoldirish" if lang == "uz" else "↩️ Оставить сохранённое"
 
-    if message.text == cancel_txt:
+    if message.text == cancel:
         await state.clear()
         user = await get_user(message.from_user.id)
         shop_name = (user or {}).get("shop_name", "—")
         await message.answer(
             t("main_menu", lang, shop_name=shop_name),
-            reply_markup=main_menu_keyboard(lang),
-            parse_mode="HTML"
+            reply_markup=main_menu_keyboard(lang), parse_mode="HTML"
         )
         return
 
-    if message.text == skip_txt:
-        # Saqlangan qiymatni qoldirish
+    if message.text == skip:
         saved_val = (saved or {}).get(field_key, "")
         if saved_val:
             form[field_key] = saved_val
@@ -356,168 +353,321 @@ async def _process_field(message: Message, state: FSMContext, field_key: str):
     if next_idx < len(FIELDS):
         await _ask_field(message, state, next_idx, lang, saved)
     else:
-        await _show_confirm(message, state, lang, form)
+        # Firma ma'lumotlari tugadi → tovar kiritishga o'tish
+        await _start_item_entry(message, state, lang)
 
-
-# 11 ta alohida handler — har biri o'z STATE da ishlaydi
 
 @router.message(MissingForm.report_date)
-async def field_report_date(msg: Message, state: FSMContext):
+async def f_report_date(msg: Message, state: FSMContext):
     await _process_field(msg, state, "report_date")
 
 @router.message(MissingForm.director_name)
-async def field_director_name(msg: Message, state: FSMContext):
+async def f_director_name(msg: Message, state: FSMContext):
     await _process_field(msg, state, "director_name")
 
 @router.message(MissingForm.org_name)
-async def field_org_name(msg: Message, state: FSMContext):
+async def f_org_name(msg: Message, state: FSMContext):
     await _process_field(msg, state, "org_name")
 
 @router.message(MissingForm.reg_number)
-async def field_reg_number(msg: Message, state: FSMContext):
+async def f_reg_number(msg: Message, state: FSMContext):
     await _process_field(msg, state, "reg_number")
 
 @router.message(MissingForm.inn)
-async def field_inn(msg: Message, state: FSMContext):
+async def f_inn(msg: Message, state: FSMContext):
     await _process_field(msg, state, "inn")
 
 @router.message(MissingForm.address)
-async def field_address(msg: Message, state: FSMContext):
+async def f_address(msg: Message, state: FSMContext):
     await _process_field(msg, state, "address")
 
 @router.message(MissingForm.contract_number)
-async def field_contract_number(msg: Message, state: FSMContext):
+async def f_contract_number(msg: Message, state: FSMContext):
     await _process_field(msg, state, "contract_number")
 
 @router.message(MissingForm.contract_date)
-async def field_contract_date(msg: Message, state: FSMContext):
+async def f_contract_date(msg: Message, state: FSMContext):
     await _process_field(msg, state, "contract_date")
 
 @router.message(MissingForm.bank_name)
-async def field_bank_name(msg: Message, state: FSMContext):
+async def f_bank_name(msg: Message, state: FSMContext):
     await _process_field(msg, state, "bank_name")
 
 @router.message(MissingForm.account_number)
-async def field_account_number(msg: Message, state: FSMContext):
+async def f_account_number(msg: Message, state: FSMContext):
     await _process_field(msg, state, "account_number")
 
 @router.message(MissingForm.bank_mfo)
-async def field_bank_mfo(msg: Message, state: FSMContext):
+async def f_bank_mfo(msg: Message, state: FSMContext):
     await _process_field(msg, state, "bank_mfo")
 
 
+# ─── Tovar kiritish ───────────────────────────────────────────────────────────
 
-# ─── Tasdiqlash sahifasi ──────────────────────────────────────────────────────
+@router.message(MissingForm.item_name)
+async def f_item_name(message: Message, state: FSMContext):
+    data = await state.get_data()
+    lang = data.get("lang", "ru")
 
-async def _show_confirm(message_or_obj, state: FSMContext, lang: str, form: dict):
-    """Barcha ma'lumotlarni ko'rsatib, tasdiqlashni so'rash."""
-    text = _form_summary(form, lang)
-    q = ("\n\n❓ Ma'lumotlar to'g'rimi? ZIP fayl yaratilsinmi?"
-         if lang == "uz" else
-         "\n\n❓ Данные верны? Создать ZIP-файл?")
-    await state.set_state(MissingForm.confirm)
+    cancel = "❌ Bekor qilish" if lang == "uz" else "❌ Отмена"
+    if message.text == cancel:
+        await state.clear()
+        user = await get_user(message.from_user.id)
+        shop_name = (user or {}).get("shop_name", "—")
+        await message.answer(
+            t("main_menu", lang, shop_name=shop_name),
+            reply_markup=main_menu_keyboard(lang), parse_mode="HTML"
+        )
+        return
 
-    if isinstance(message_or_obj, Message):
-        await message_or_obj.answer(
-            text + q,
-            reply_markup=_confirm_keyboard(lang),
+    await state.update_data(current_item_name=message.text.strip())
+    await state.set_state(MissingForm.item_qty)
+
+    text = (
+        f"✅ Tovar: <b>{message.text.strip()[:50]}</b>\n\n"
+        f"🔢 Yo'qolgan soni (faqat raqam):\n<i>Masalan: 2</i>"
+        if lang == "uz" else
+        f"✅ Товар: <b>{message.text.strip()[:50]}</b>\n\n"
+        f"🔢 Количество потерянных (только цифра):\n<i>Например: 2</i>"
+    )
+    await message.answer(text, reply_markup=_cancel_kb(lang), parse_mode="HTML")
+
+
+@router.message(MissingForm.item_qty)
+async def f_item_qty(message: Message, state: FSMContext):
+    data = await state.get_data()
+    lang = data.get("lang", "ru")
+
+    cancel = "❌ Bekor qilish" if lang == "uz" else "❌ Отмена"
+    if message.text == cancel:
+        await state.clear()
+        user = await get_user(message.from_user.id)
+        shop_name = (user or {}).get("shop_name", "—")
+        await message.answer(
+            t("main_menu", lang, shop_name=shop_name),
+            reply_markup=main_menu_keyboard(lang), parse_mode="HTML"
+        )
+        return
+
+    try:
+        qty = int(message.text.strip().replace(" ", ""))
+        if qty <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer(
+            "⚠️ Faqat musbat son kiriting. Masalan: <code>2</code>"
+            if lang == "uz" else
+            "⚠️ Введите только положительное число. Например: <code>2</code>",
             parse_mode="HTML"
+        )
+        return
+
+    await state.update_data(current_item_qty=qty)
+    await state.set_state(MissingForm.item_price)
+
+    text = (
+        f"💰 Tovar tannarxi (so'mda, faqat raqam):\n"
+        f"<i>Masalan: 14924</i>\n\n"
+        f"💡 Tannarxingizni bilmasangiz, Uzum kabinetdagi sotish narxini kiriting"
+        if lang == "uz" else
+        f"💰 Себестоимость товара (в сумах, только цифра):\n"
+        f"<i>Например: 14924</i>\n\n"
+        f"💡 Если не знаете себестоимость, введите цену продажи из кабинета Uzum"
+    )
+    await message.answer(text, reply_markup=_cancel_kb(lang), parse_mode="HTML")
+
+
+@router.message(MissingForm.item_price)
+async def f_item_price(message: Message, state: FSMContext):
+    data = await state.get_data()
+    lang = data.get("lang", "ru")
+
+    cancel = "❌ Bekor qilish" if lang == "uz" else "❌ Отмена"
+    if message.text == cancel:
+        await state.clear()
+        user = await get_user(message.from_user.id)
+        shop_name = (user or {}).get("shop_name", "—")
+        await message.answer(
+            t("main_menu", lang, shop_name=shop_name),
+            reply_markup=main_menu_keyboard(lang), parse_mode="HTML"
+        )
+        return
+
+    try:
+        price = float(message.text.strip().replace(" ", "").replace(",", "."))
+        if price <= 0:
+            raise ValueError
+    except ValueError:
+        await message.answer(
+            "⚠️ Faqat musbat son kiriting. Masalan: <code>14924</code>"
+            if lang == "uz" else
+            "⚠️ Введите только положительное число. Например: <code>14924</code>",
+            parse_mode="HTML"
+        )
+        return
+
+    # Tovarni ro'yxatga qo'shamiz
+    items = data.get("items", [])
+    name  = data.get("current_item_name", "—")
+    qty   = data.get("current_item_qty", 1)
+    comp  = qty * price
+
+    items.append({"name": name, "qty": qty, "price": price})
+    await state.update_data(items=items)
+
+    # Qo'shilgan tovarni ko'rsatamiz
+    if lang == "uz":
+        text = (
+            f"✅ <b>Qo'shildi:</b>\n"
+            f"📦 {name[:50]}\n"
+            f"🔢 {qty} dona × {price:,.0f} = <b>{comp:,.0f} so'm</b>\n\n"
+            f"Jami tovarlar: <b>{len(items)} ta</b>\n\n"
+            f"Yana tovar qo'shish yoki tayyor?"
         )
     else:
-        await message_or_obj.answer(
-            text + q,
-            reply_markup=_confirm_keyboard(lang),
-            parse_mode="HTML"
+        text = (
+            f"✅ <b>Добавлено:</b>\n"
+            f"📦 {name[:50]}\n"
+            f"🔢 {qty} шт. × {price:,.0f} = <b>{comp:,.0f} сум</b>\n\n"
+            f"Всего товаров: <b>{len(items)} шт.</b>\n\n"
+            f"Добавить ещё или готово?"
         )
 
+    await message.answer(text, reply_markup=_more_items_kb(lang), parse_mode="HTML")
 
-@router.callback_query(F.data == "missing_confirm_redo")
-async def confirm_redo(callback: CallbackQuery, state: FSMContext):
-    """Qayta kiritish — birinchi maydondan boshlaymiz."""
+
+# ─── Yana tovar / Tayyor ──────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "missing_add_more")
+async def add_more_items(call: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    lang = data.get("lang", "ru")
+    await call.answer()
+    await _start_item_entry(call, state, lang)
+
+
+@router.callback_query(F.data == "missing_items_done")
+async def items_done(call: CallbackQuery, state: FSMContext):
     data  = await state.get_data()
     lang  = data.get("lang", "ru")
-    saved = await get_missing_report_form(callback.from_user.id)
+    items = data.get("items", [])
+    form  = data.get("form", {})
+
+    if not items:
+        await call.answer(
+            "⚠️ Kamida 1 ta tovar kiriting!" if lang == "uz"
+            else "⚠️ Введите хотя бы 1 товар!",
+            show_alert=True
+        )
+        return
+
+    await call.answer()
+    await _go_to_confirm(call, state, lang, form, items)
+
+
+# ─── Tasdiqlash ───────────────────────────────────────────────────────────────
+
+@router.callback_query(F.data == "missing_redo_items")
+async def redo_items(call: CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    lang = data.get("lang", "ru")
+    await state.update_data(items=[])
+    await call.answer()
+    await _start_item_entry(call, state, lang)
+
+
+@router.callback_query(F.data == "missing_redo_form")
+async def redo_form(call: CallbackQuery, state: FSMContext):
+    data  = await state.get_data()
+    lang  = data.get("lang", "ru")
+    saved = await get_missing_report_form(call.from_user.id)
     await state.update_data(form={}, field_idx=0, saved=saved)
-    await callback.message.answer(
-        "🔄 Qayta to'ldirish boshlanmoqda..." if lang == "uz"
-        else "🔄 Начинаю заново...",
-        parse_mode="HTML"
-    )
-    await _ask_field(callback, state, 0, lang, saved)
-    await callback.answer()
+    await call.answer()
+    await _ask_field(call, state, 0, lang, saved)
 
 
 @router.callback_query(F.data == "missing_confirm_yes")
-async def confirm_yes(callback: CallbackQuery, state: FSMContext, bot: Bot):
-    """Tasdiqlash → ZIP yaratish → yuborish."""
+async def confirm_yes(call: CallbackQuery, state: FSMContext, bot: Bot):
     data  = await state.get_data()
     lang  = data.get("lang", "ru")
     form  = data.get("form", {})
-    raw_items = data.get("missing_items", [])
+    items_raw = data.get("items", [])
 
-    # MissingItem-ga o'xshash ob'ektlar yaratamiz
-    from services.missing_service import MissingItem
-    items = [MissingItem(**d) for d in raw_items]
+    if not items_raw:
+        await call.answer(
+            "⚠️ Tovarlar kiritilmagan!" if lang == "uz" else "⚠️ Товары не введены!",
+            show_alert=True
+        )
+        return
 
-    await callback.answer(
-        "⏳ ZIP tayyorlanmoqda..." if lang == "uz"
-        else "⏳ Формирую ZIP..."
+    # dict → MissingItem
+    missing_items = [
+        MissingItem(
+            name=i["name"],
+            sku_code="—",
+            barcode="—",
+            missing_qty=i["qty"],
+            purchase_price=i["price"],
+            compensation=i["qty"] * i["price"],
+        )
+        for i in items_raw
+    ]
+
+    await call.answer(
+        "⏳ ZIP tayyorlanmoqda..." if lang == "uz" else "⏳ Формирую ZIP..."
     )
-    loading = await callback.message.answer(
-        "⚙️ Hujjatlar generatsiya qilinmoqda, biroz kuting..."
-        if lang == "uz" else
-        "⚙️ Генерирую документы, подождите немного..."
+    loading = await call.message.answer(
+        "⚙️ Hujjatlar generatsiya qilinmoqda..." if lang == "uz"
+        else "⚙️ Генерирую документы, подождите..."
     )
 
     try:
-        # Sana bo'sh bo'lsa bugungi kun
         if not form.get("report_date"):
             form["report_date"] = datetime.now().strftime("%Y-%m-%d")
 
-        zip_buf  = create_zip(form, items)
+        zip_buf  = create_zip(form, missing_items)
         date_str = form["report_date"].replace("-", "")
         fname    = f"yoqolgan-tovarlar-{date_str}.zip"
 
-        total_comp = sum(i.compensation for i in items)
-        total_qty  = sum(i.missing_qty  for i in items)
+        total_qty  = sum(i.missing_qty for i in missing_items)
+        total_comp = sum(i.compensation for i in missing_items)
 
         if lang == "uz":
             caption = (
-                f"📦 <b>Yo'qolgan tovarlar hisoboti</b>\n\n"
+                f"📦 <b>Yo'qolgan tovarlar hujjati</b>\n\n"
                 f"📊 Yo'qolgan: <b>{total_qty} dona</b>\n"
                 f"💰 Kompensatsiya: <b>{total_comp:,.0f} so'm</b>\n\n"
                 f"📄 <code>Доп-соглашение.docx</code>\n"
                 f"📊 <code>отчет-потерянных-товаров.xlsx</code>\n\n"
-                "💡 Shu fayllarni Uzum support ga yuboring."
+                f"💡 Shu fayllarni Uzum support ga yuboring."
             )
         else:
             caption = (
-                f"📦 <b>Отчёт по потерянным товарам</b>\n\n"
+                f"📦 <b>Документ по потерянным товарам</b>\n\n"
                 f"📊 Потеряно: <b>{total_qty} шт.</b>\n"
                 f"💰 Компенсация: <b>{total_comp:,.0f} сум</b>\n\n"
                 f"📄 <code>Доп-соглашение.docx</code>\n"
                 f"📊 <code>отчет-потерянных-товаров.xlsx</code>\n\n"
-                "💡 Отправьте эти файлы в поддержку Uzum."
+                f"💡 Отправьте эти файлы в поддержку Uzum."
             )
 
         await bot.send_document(
-            chat_id=callback.from_user.id,
+            chat_id=call.from_user.id,
             document=BufferedInputFile(zip_buf.read(), filename=fname),
             caption=caption,
             parse_mode="HTML"
         )
 
-        # Saqlash
-        await save_missing_report_form(callback.from_user.id, form)
+        await save_missing_report_form(call.from_user.id, form)
         await loading.delete()
 
-        user = await get_user(callback.from_user.id)
+        user = await get_user(call.from_user.id)
         shop_name = (user or {}).get("shop_name", "—")
-        await callback.message.answer(
-            "✅ Hujjatlar yuborildi! Ma'lumotlar saqlandi.\n"
+        await call.message.answer(
+            "✅ Hujjatlar yuborildi! Firma ma'lumotlari saqlandi.\n"
             "Keyingi safar tezroq bo'ladi 😊"
             if lang == "uz" else
-            "✅ Документы отправлены! Данные сохранены.\n"
+            "✅ Документы отправлены! Данные фирмы сохранены.\n"
             "В следующий раз будет быстрее 😊",
             reply_markup=main_menu_keyboard(lang)
         )
@@ -526,7 +676,7 @@ async def confirm_yes(callback: CallbackQuery, state: FSMContext, bot: Bot):
     except Exception as e:
         logger.error(f"ZIP generation error: {e}", exc_info=True)
         await loading.edit_text(
-            f"❌ Xatolik yuz berdi: <code>{str(e)[:200]}</code>"
+            f"❌ Xatolik: <code>{str(e)[:200]}</code>"
             if lang == "uz" else
             f"❌ Ошибка: <code>{str(e)[:200]}</code>",
             parse_mode="HTML"
